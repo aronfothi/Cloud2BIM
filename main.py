@@ -332,4 +332,4 @@ async def download_point_mapping_file(job_id: str):
 if __name__ == "__main__":
     import uvicorn
     # This is for local development. For production, use a proper ASGI server like Gunicorn with Uvicorn workers.
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)

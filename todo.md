@@ -84,10 +84,10 @@ This document defines the criteria for completing each component of the project.
 
 ## 🧪 6. Testing & Validation
 
-- [ ] Unit tests or manual test scripts for each endpoint.
+- [x] Unit tests or manual test scripts for each endpoint.
 - [ ] IFC output opened and verified in at least one BIM viewer.
 - [ ] Mapping file manually checked against known point cloud.
-- [ ] Sample project (input + config + output) added for demonstration.
+- [x] Sample project (input + config + output) added for demonstration.
 
 ---
 

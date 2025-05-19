@@ -23,6 +23,8 @@ build/
 .vscode/
 *.code-workspace
 
+output/
+
 # Project specific
 jobs/*/
 !jobs/.gitkeep

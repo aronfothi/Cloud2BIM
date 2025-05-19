@@ -1,6 +1,30 @@
-from aux_functions import *
-from generate_ifc import IFCmodel
-from space_generator import *
+from app.core.aux_functions import *
+from app.core.generate_ifc import IFCmodel
+from app.core.space_generator import *
+import numpy as np
+import open3d as o3d
+import logging
+from typing import Dict, List, Any
+from dataclasses import dataclass
+from sklearn.cluster import DBSCAN
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class WallParams:
+    min_height: float
+    min_width: float
+    thickness: float
+
+@dataclass
+class SlabParams:
+    min_area: float
+    thickness: float
+
+@dataclass
+class OpeningParams:
+    min_width: float
+    min_height: float
 
 # === Load Configuration ===
 config = load_config_and_variables()
@@ -417,3 +441,163 @@ for wall in walls:
 # Write the IFC model to a file
 ifc_model.write()
 last_time = log('\nIFC model saved to %s.' % ifc_output_file, last_time, log_filename)
+
+def process_point_cloud(pcd: o3d.geometry.PointCloud, voxel_size: float, noise_threshold: float) -> o3d.geometry.PointCloud:
+    """
+    Preprocess point cloud by downsampling and removing noise.
+    """
+    # Downsample using voxel grid
+    downsampled = pcd.voxel_down_sample(voxel_size=voxel_size)
+    
+    # Remove noise using statistical outlier removal
+    cleaned, _ = downsampled.remove_statistical_outlier(
+        nb_neighbors=20,
+        std_ratio=noise_threshold
+    )
+    
+    return cleaned
+
+def detect_walls(pcd: o3d.geometry.PointCloud, params: Dict) -> List[Dict]:
+    """
+    Detect walls in the point cloud using vertical plane detection.
+    """
+    walls = []
+    points = np.asarray(pcd.points)
+    
+    # Use RANSAC to detect vertical planes
+    plane_model, inliers = pcd.segment_plane(
+        distance_threshold=params["thickness"] / 2,
+        ransac_n=3,
+        num_iterations=1000
+    )
+    
+    # Extract wall points
+    wall_points = points[inliers]
+    
+    # Cluster wall points to separate different walls
+    clusters = DBSCAN(
+        eps=params["thickness"],
+        min_samples=50
+    ).fit(wall_points)
+    
+    # Process each cluster as a potential wall
+    for cluster_id in np.unique(clusters.labels_):
+        if cluster_id == -1:  # Skip noise
+            continue
+            
+        cluster_points = wall_points[clusters.labels_ == cluster_id]
+        
+        # Calculate wall dimensions
+        height = np.max(cluster_points[:, 2]) - np.min(cluster_points[:, 2])
+        width = np.max(np.linalg.norm(cluster_points[:, :2], axis=1))
+        
+        if height >= params["min_height"] and width >= params["min_width"]:
+            walls.append({
+                "type": "wall",
+                "geometry": cluster_points,
+                "properties": {
+                    "height": height,
+                    "width": width,
+                    "thickness": params["thickness"]
+                },
+                "point_indices": inliers[clusters.labels_ == cluster_id].tolist()
+            })
+    
+    return walls
+
+def detect_slabs(pcd: o3d.geometry.PointCloud, params: Dict) -> List[Dict]:
+    """
+    Detect floor and ceiling slabs using horizontal plane detection.
+    """
+    slabs = []
+    points = np.asarray(pcd.points)
+    
+    # Find horizontal planes
+    plane_model, inliers = pcd.segment_plane(
+        distance_threshold=params["thickness"] / 2,
+        ransac_n=3,
+        num_iterations=1000
+    )
+    
+    # Extract slab points
+    slab_points = points[inliers]
+    
+    # Project points to XY plane and calculate area
+    xy_points = slab_points[:, :2]
+    hull = ConvexHull(xy_points)
+    area = hull.area
+    
+    if area >= params["min_area"]:
+        slabs.append({
+            "type": "slab",
+            "geometry": slab_points,
+            "properties": {
+                "area": area,
+                "thickness": params["thickness"],
+                "elevation": np.mean(slab_points[:, 2])
+            },
+            "point_indices": inliers.tolist()
+        })
+    
+    return slabs
+
+def detect_openings(pcd: o3d.geometry.PointCloud, walls: List[Dict], params: Dict) -> List[Dict]:
+    """
+    Detect openings (windows/doors) in walls using point density analysis.
+    """
+    openings = []
+    
+    for wall in walls:
+        wall_points = wall["geometry"]
+        
+        # Project wall points to 2D
+        wall_2d = wall_points[:, :2]
+        
+        # Create density map
+        density = gaussian_kde(wall_2d.T)(wall_2d.T)
+        
+        # Find regions with low density (potential openings)
+        low_density = density < np.mean(density) - np.std(density)
+        
+        if np.any(low_density):
+            opening_points = wall_points[low_density]
+            
+            # Calculate opening dimensions
+            height = np.max(opening_points[:, 2]) - np.min(opening_points[:, 2])
+            width = np.max(np.linalg.norm(opening_points[:, :2], axis=1))
+            
+            if height >= params["min_height"] and width >= params["min_width"]:
+                opening_type = "door" if np.min(opening_points[:, 2]) < 0.1 else "window"
+                
+                openings.append({
+                    "type": opening_type,
+                    "geometry": opening_points,
+                    "properties": {
+                        "height": height,
+                        "width": width,
+                        "wall_id": wall["id"]
+                    },
+                    "point_indices": np.where(low_density)[0].tolist()
+                })
+    
+    return openings
+
+def detect_elements(pcd: o3d.geometry.PointCloud, wall_params: Dict, slab_params: Dict, opening_params: Dict) -> List[Dict]:
+    """
+    Detect all building elements in the point cloud.
+    """
+    elements = []
+    
+    # Detect walls first
+    walls = detect_walls(pcd, wall_params)
+    elements.extend(walls)
+    
+    # Detect slabs
+    slabs = detect_slabs(pcd, slab_params)
+    elements.extend(slabs)
+    
+    # Detect openings in walls
+    openings = detect_openings(pcd, walls, opening_params)
+    elements.extend(openings)
+    
+    return elements

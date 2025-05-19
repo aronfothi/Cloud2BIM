@@ -10,7 +10,7 @@ import yaml
 import cv2
 import pandas as pd
 from scipy.signal import find_peaks
-from skimage.morphology import closing, footprint_rectangle
+from skimage.morphology import closing, rectangle
 import open3d as o3d
 import e57
 from tqdm import tqdm
