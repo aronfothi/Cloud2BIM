@@ -1,0 +1,26 @@
+# Sample configuration for Cloud2BIM processing
+version: "1.0"
+
+# Point cloud processing parameters
+preprocessing:
+  voxel_size: 0.05  # meters
+  noise_threshold: 0.02  # meters
+
+# Detection parameters
+detection:
+  wall:
+    min_height: 2.0  # meters
+    min_width: 1.0   # meters
+    thickness: 0.2   # meters
+  slab:
+    min_area: 4.0    # square meters
+    thickness: 0.3   # meters
+  opening:
+    min_width: 0.6   # meters
+    min_height: 1.8  # meters
+
+# IFC export settings
+ifc:
+  project_name: "Sample Building"
+  building_type: "Office"
+  export_materials: true

@@ -1,49 +1,128 @@
-# Cloud2BIM 
-![Workflow](title.png)
-Cloud2BIM automates the Scan-to-BIM process by converting point clouds into 3D parametric entities.  It employs a segmentation algorithm that utilizes point cloud density analysis, augmented by image and morphological operations. This allows the software to precisely extract the geometry of building elements such as slabs, walls, windows, and doors. The output is generated in IFC format, ensuring compatibility with other OpenBIM tools. The primary motivation for this software is to streamline and enhance decision-making at the end of a building's lifecycle, leading to more efficient material use during demolition or deconstruction.
-# Installation
-To install Cloud2BIM, follow these steps:
-git clone 
-```
-https://github.com/yourusername/Cloud2BIM.git
-```
+# Cloud2BIM Async Web Service
 
-Install dependencies:
+A FastAPI-based web service that processes 3D point cloud files (PTX or XYZ format) and a YAML configuration to generate structured BIM models in IFC format. Based on the open-source [Cloud2BIM](https://github.com/aronfothi/Cloud2BIM) project, this service segments building elements such as slabs, walls, and openings, and returns both an IFC file and a point-to-element index mapping.
 
-First, ensure you have Python and pip installed.
-Then, install the required dependencies listed in the requirements.txt file:
-```
+---
+
+## 🚀 Features
+
+* Accepts `.ptx` and `.xyz` point cloud formats
+* Uses Cloud2BIM segmentation logic
+* Asynchronous processing with job tracking
+* YAML-based configurable pipeline
+* REST API with progress reporting
+* Outputs:
+
+  * IFC model file (`.ifc`)
+  * JSON file mapping IFC elements to point indices
+* Includes a CLI client tool
+
+---
+
+## 🚪 Requirements
+
+* Python 3.9+
+* pip
+* Optional: BlenderBIM or other IFC viewer for result validation
+
+---
+
+## 📂 Installation
+
+```bash
+git clone https://github.com/<your-org>/cloud2bim-service.git
+cd cloud2bim-service
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
-# Running the Script
-The `cloud2entities.py` script requires a YAML configuration file to run. You can provide the path to the 
-configuration file as a command-line argument. If no argument is provided, the script will 
-automatically use the default file `config.yaml`.
 
-### Example command
-```
-python cloud2entities.py config.yaml
-```
-### Dataset
-The complete original point cloud for Kladno station is available at Zenodo platform.
-```
-https://zenodo.org/records/14221915
-```
-## Citation
+---
 
-If you find this project or any part of it useful in your research or work, please consider citing the following preprint:
+## 🚪 Run the Server
+
+```bash
+uvicorn app.main:app --reload
 ```
-@misc{Cloud2BIM2025, 
-title={Cloud2BIM: An open-source automatic pipeline for efficient conversion of large-scale point clouds into IFC format}, 
-    author={Slávek Zbirovský and Václav Nežerka}, 
-    year={2025}, 
-    eprint={2503.11498}, 
-    archivePrefix={arXiv}, 
-    primaryClass={cs.CV}, 
-    url={https://arxiv.org/abs/2503.11498}, 
-    note={Accessed: 28.3.2025} 
-    }
+
+Visit [http://localhost:8000/docs](http://localhost:8000/docs) for Swagger UI.
+
+---
+
+## 🚼 API Endpoints
+
+| Endpoint                               | Method | Description                         |
+| -------------------------------------- | ------ | ----------------------------------- |
+| `/convert`                             | POST   | Upload point cloud and config files |
+| `/status/{job_id}`                     | GET    | Check job progress                  |
+| `/results/{job_id}/model.ifc`          | GET    | Download the generated IFC file     |
+| `/results/{job_id}/point_mapping.json` | GET    | Download point index mapping        |
+
+---
+
+## 💪 Example Usage (CLI Client)
+
+```bash
+python client/upload_client.py \
+  --pointcloud data/building.ptx \
+  --config data/config.yaml \
+  --server http://localhost:8000
 ```
-# License
-GPL (General Public License)
-https://www.gnu.org/licenses/gpl-3.0.html
+
+Outputs:
+
+* `job_id.ifc`
+* `job_id_point_mapping.json`
+
+---
+
+## 📊 Output Structure
+
+Each job creates a folder under `jobs/<job_id>/` containing:
+
+* `input/`  - Original uploaded files
+* `output/` - Generated IFC and mapping results
+
+---
+
+## 🛠️ Development
+
+See `developer-guide.md` for full development instructions.
+
+### Setup Linting and Formatting
+
+```bash
+pip install black flake8
+black app/
+flake8 app/
+```
+
+---
+
+## 🚫 Limitations
+
+* No authentication or file size limits
+* No automatic cleanup of old jobs
+* Limited to single-instance async workers (no Celery)
+
+---
+
+## 🚪 Contributing
+
+Contributions are welcome! Please open an issue or PR.
+
+---
+
+## 📑 License
+
+MIT License — see `LICENSE` file for details.
+
+---
+
+## 🌐 Credits
+
+Built using [Cloud2BIM](https://github.com/aronfothi/Cloud2BIM) and [IfcOpenShell](http://ifcopenshell.org/).
+
+---
+
+Happy building 🏠🚀
