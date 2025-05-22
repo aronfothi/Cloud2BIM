@@ -19,6 +19,10 @@ def get_job_input_dir(job_id: str) -> str:
     """Returns the input directory path for a job."""
     return os.path.join(JOBS_BASE_DIR, job_id, "input")
 
+def get_job_input_file_path(job_id: str, filename: str) -> str:
+    """Returns the absolute path to a specific file in the job's input directory."""
+    return os.path.join(get_job_input_dir(job_id), filename)
+
 def get_job_output_dir(job_id: str) -> str:
     """Returns the output directory path for a job."""
     return os.path.join(JOBS_BASE_DIR, job_id, "output")

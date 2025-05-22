@@ -14,84 +14,112 @@ from skimage.morphology import closing, rectangle
 import open3d as o3d
 import e57
 from tqdm import tqdm
-from plotting_functions import *
+from .plotting_functions import *
+import logging # Add logging import
 
+logger_aux = logging.getLogger(__name__) # Create a logger instance
 
-def load_config_and_variables():
-    """Load YAML config passed as CLI argument, validate required keys, and return configuration variables."""
-    if len(sys.argv) < 2:
-        # Default fallback path for development
-        config_path = "config.yaml"  # nebo celá cesta
-        print("[INFO] No argument provided, using input configuration file in directory of project:", config_path)
-    else:
-        config_path = sys.argv[1]
+def load_config_and_variables(config_path: str | None = None):  # Added config_path parameter
+    """Load YAML config, validate required keys, and return configuration variables."""
+    
+    effective_config_path = config_path
+    logger_aux.info(f"load_config_and_variables called with config_path: {config_path}")
 
-    if not os.path.isfile(config_path):
-        sys.exit(f"[ERROR] File '{config_path}' does not exist.")
+    if effective_config_path is None:
+        logger_aux.warning("load_config_and_variables called without an explicit config_path.")
+        app_config_dir = os.path.join(os.path.dirname(__file__), "..", "config")
+        default_server_config_path = os.path.join(app_config_dir, "config.yaml")
+        if os.path.isfile(default_server_config_path):
+            effective_config_path = default_server_config_path
+            logger_aux.info(f"No explicit config_path, using default server config: {effective_config_path}")
+        else:
+            logger_aux.error("No explicit config_path provided and default server config not found.")
+            return None # Critical failure if no path can be determined
+
+    logger_aux.info(f"Attempting to load configuration from: {effective_config_path}")
+
+    if not os.path.isfile(effective_config_path):
+        logger_aux.error(f"Configuration file '{effective_config_path}' does not exist. Cannot load config.")
+        return None  # Indicate failure to load
 
     try:
-        with open(config_path, 'r') as file:
+        with open(effective_config_path, 'r') as file:
             config = yaml.safe_load(file)
     except yaml.YAMLError as e:
-        sys.exit(f"[ERROR] Invalid YAML format in '{config_path}': {e}")
+        logger_aux.error(f"Error parsing YAML file {effective_config_path}: {e}")
+        return None # Indicate failure to parse
     except Exception as e:
-        sys.exit(f"[ERROR] Failed to load configuration file: {e}")
+        logger_aux.error(f"Unexpected error loading/parsing YAML file {effective_config_path}: {e}")
+        return None
 
+    if not isinstance(config, dict):
+        logger_aux.error(f"Configuration file '{effective_config_path}' did not load as a dictionary.")
+        return None
+
+    # Validate required keys (example)
+    # required_keys = [
+    #     "project_settings", "point_cloud_processing", "ifc_settings", 
+    #     "slab_detection", "wall_detection", "opening_detection"
+    # ]
+    # Updated required_keys based on tests/data/sample_config.yaml
     required_keys = [
-        "e57_input", "xyz_files", "exterior_scan",
-        "dilute", "dilution_factor", "pc_resolution", "grid_coefficient",
-        "bfs_thickness", "tfs_thickness",
-        "min_wall_length", "min_wall_thickness", "max_wall_thickness", "exterior_walls_thickness",
-        "output_ifc", "ifc_project_name", "ifc_project_long_name", "ifc_project_version",
-        "ifc_author_name", "ifc_author_surname", "ifc_author_organization",
-        "ifc_building_name", "ifc_building_type", "ifc_building_phase",
-        "ifc_site_latitude", "ifc_site_longitude", "ifc_site_elevation",
-        "material_for_objects"
+        "preprocessing", "detection", "ifc"
     ]
 
-    if config.get("e57_input"):
-        required_keys.append("e57_files")
+    missing_keys = [key for key in required_keys if key not in config]
+    if missing_keys:
+        for key in missing_keys:
+            logger_aux.error(f"Missing required config key: '{key}' in '{effective_config_path}'.")
+        logger_aux.error(f"Missing required keys in '{effective_config_path}'. Cannot proceed with this configuration.")
+        return None # Indicate failure due to missing keys
 
-    missing = [key for key in required_keys if key not in config]
-    if missing:
-        for key in missing:
-            print(f"[ERROR] Missing required config key: '{key}'")
-        sys.exit(1)
+    # The original function created a flat 'variables' dictionary.
+    # For now, we return the raw 'config' dictionary as 'config_params'.
+    # Downstream functions (cloud2entities, generate_ifc) will need to be adapted
+    # to use this nested structure (e.g., config_params["preprocessing"]["voxel_size"])
 
-    variables = {
-        "e57_input": config["e57_input"],
-        "xyz_filenames": config["xyz_files"],
-        "exterior_scan": config["exterior_scan"],
-        "dilute_pointcloud": config["dilute"],
-        "dilution_factor": config["dilution_factor"],
-        "pc_resolution": config["pc_resolution"],
-        "grid_coefficient": config["grid_coefficient"],
-        "bfs_thickness": config["bfs_thickness"],
-        "tfs_thickness": config["tfs_thickness"],
-        "min_wall_length": config["min_wall_length"],
-        "min_wall_thickness": config["min_wall_thickness"],
-        "max_wall_thickness": config["max_wall_thickness"],
-        "exterior_walls_thickness": config["exterior_walls_thickness"],
-        "ifc_output_file": config["output_ifc"],
-        "ifc_project_name": config["ifc_project_name"],
-        "ifc_project_long_name": config["ifc_project_long_name"],
-        "ifc_project_version": config["ifc_project_version"],
-        "ifc_author_name": config["ifc_author_name"],
-        "ifc_author_surname": config["ifc_author_surname"],
-        "ifc_author_organization": config["ifc_author_organization"],
-        "ifc_building_name": config["ifc_building_name"],
-        "ifc_building_type": config["ifc_building_type"],
-        "ifc_building_phase": config["ifc_building_phase"],
-        "ifc_site_latitude": tuple(config["ifc_site_latitude"]),
-        "ifc_site_longitude": tuple(config["ifc_site_longitude"]),
-        "ifc_site_elevation": config["ifc_site_elevation"],
-        "material_for_objects": config["material_for_objects"]
-    }
+    logger_aux.info(f"Successfully loaded and validated configuration from {effective_config_path}")
+    return config
 
-    if config["e57_input"]:
-        variables["e57_file_names"] = config["e57_files"]
+    # Old 'variables' dictionary creation - removed for now as it's incompatible with sample_config.yaml
+    # variables = {
+    #     "e57_input": config["e57_input"],
+    #     "xyz_filenames": config["xyz_files"],
+    #     "exterior_scan": config["exterior_scan"],
+    #     "dilute_pointcloud": config["dilute"],
+    #     "dilution_factor": config["dilution_factor"],
+    #     "pc_resolution": config["pc_resolution"],
+    #     "grid_coefficient": config["grid_coefficient"],
+    #     "bfs_thickness": config["bfs_thickness"],
+    #     "tfs_thickness": config["tfs_thickness"],
+    #     "min_wall_length": config["min_wall_length"],
+    #     "min_wall_thickness": config["min_wall_thickness"],
+    #     "max_wall_thickness": config["max_wall_thickness"],
+    #     "exterior_walls_thickness": config["exterior_walls_thickness"],
+    #     "ifc_output_file": config["output_ifc"],
+    #     "ifc_project_name": config["ifc_project_name"],
+    #     "ifc_project_long_name": config["ifc_project_long_name"],
+    #     "ifc_project_version": config["ifc_project_version"],
+    #     "ifc_author_name": config["ifc_author_name"],
+    #     "ifc_author_surname": config["ifc_author_surname"],
+    #     "ifc_author_organization": config["ifc_author_organization"],
+    #     "ifc_building_name": config["ifc_building_name"],
+    #     "ifc_building_type": config["ifc_building_type"],
+    #     "ifc_building_phase": config["ifc_building_phase"],
+    #     "ifc_site_latitude": tuple(config["ifc_site_latitude"]),
+    #     "ifc_site_longitude": tuple(config["ifc_site_longitude"]),
+    #     "ifc_site_elevation": config["ifc_site_elevation"],
+    #     "material_for_objects": config["material_for_objects"]
+    # }
 
-    return variables
+    # if config["e57_input"]:
+    #     if "e57_files" not in config:
+    #         logger_aux.error(f"Missing required config key: 'e57_files' when 'e57_input' is true in '{effective_config_path}'.")
+    #         return None # Indicate failure
+    #     variables["e57_file_names"] = config["e57_files"]
+
+    # return variables
+
 
 def log(message, last_time, filename):
     current_time = time.time()
@@ -300,8 +328,6 @@ def identify_slabs(points_xyz, points_rgb, bottom_floor_slab_thickness, top_floo
         elif start is not None:
             h_surf_candidates.append([z_array[start], z_array[i - 1] + z_step])
             start = None
-
-    if start is not None:
         h_surf_candidates.append([z_array[start], z_array[-1] + z_step])
 
     merged_candidates = []

@@ -18,20 +18,22 @@ router = APIRouter()
 @router.post("/convert", response_model=Job, status_code=202)
 async def create_conversion_job(
     background_tasks: BackgroundTasks,
-    ptx_file: UploadFile = File(..., description="PTX or XYZ point cloud file"),
+    point_cloud_file: UploadFile = File(..., description="Merged point cloud file (e.g., PLY, PTX, XYZ, PCD)"),
     config_file: UploadFile = File(..., description="YAML configuration file")
 ):
     """
-    Accepts a point cloud file (PTX/XYZ) and a YAML configuration file,
+    Accepts a merged point cloud file (e.g., PLY) and a YAML configuration file,
     stores them for the job, starts an asynchronous conversion job, 
     and returns a job ID with status 202 (Accepted).
     """
     job_id = str(uuid.uuid4())
     
-    # Validate file types
-    if not (ptx_file.filename.endswith((".ptx", ".xyz"))):
-        raise HTTPException(status_code=400, detail="Invalid point cloud file type. Must be .ptx or .xyz")
-    if not (config_file.filename.endswith((".yaml", ".yml"))):
+    # Validate file types - more generic for point cloud, specific for config
+    # Client now sends a .ply file, but we can be a bit flexible or enforce .ply
+    supported_pc_extensions = (".ply", ".ptx", ".xyz", ".pcd") # Server can define what it accepts
+    if not (point_cloud_file.filename.lower().endswith(supported_pc_extensions)):
+        raise HTTPException(status_code=400, detail=f"Invalid point cloud file type. Must be one of {supported_pc_extensions}")
+    if not (config_file.filename.lower().endswith((".yaml", ".yml"))):
         raise HTTPException(status_code=400, detail="Invalid configuration file type. Must be .yaml or .yml")
 
     # Create job directories
@@ -41,12 +43,14 @@ async def create_conversion_job(
     os.makedirs(job_output_dir, exist_ok=True)
     
     # Save files
-    safe_ptx_filename = f"{job_id}_{os.path.basename(ptx_file.filename)}"
-    ptx_filepath = os.path.join(job_input_dir, safe_ptx_filename)
+    # Use a consistent internal name for the point cloud file, e.g., input.ply or derive from job_id
+    # For simplicity, using the uploaded filename but prefixed with job_id for uniqueness in the job folder.
+    safe_pc_filename = f"{job_id}_{os.path.basename(point_cloud_file.filename)}"
+    pc_filepath = os.path.join(job_input_dir, safe_pc_filename)
 
     try:
-        save_upload_file(ptx_file, ptx_filepath)
-        logger.info(f"Job {job_id}: Saved point cloud file to {ptx_filepath}")
+        save_upload_file(point_cloud_file, pc_filepath)
+        logger.info(f"Job {job_id}: Saved point cloud file to {pc_filepath}")
         
         config_content = await config_file.read()
         config_content_str = config_content.decode('utf-8')
@@ -56,7 +60,7 @@ async def create_conversion_job(
         logger.error(f"Error saving uploaded files for job {job_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Could not save uploaded files: {e}")
     finally:
-        await ptx_file.close()
+        await point_cloud_file.close()
         await config_file.close()
 
     # Initialize job
@@ -65,8 +69,8 @@ async def create_conversion_job(
         "stage": "Queued",
         "progress": 0,
         "message": "Job received and queued for processing.",
-        "ptx_file_path": ptx_filepath,
-        "original_ptx_filename": os.path.basename(ptx_file.filename),
+        "point_cloud_file_path": pc_filepath, # Updated field name
+        "original_point_cloud_filename": os.path.basename(point_cloud_file.filename), # Updated field name
         "config_content": config_content_str
     }
 

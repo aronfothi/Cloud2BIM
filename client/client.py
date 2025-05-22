@@ -1,31 +1,243 @@
 import requests
+from requests.exceptions import RequestException
+from pathlib import Path
 import time
 import argparse
 import os
+import open3d as o3d
+import numpy as np
+import tempfile
+from typing import Tuple, List, Optional
 
 # Default server URL
-DEFAULT_SERVER_URL = "http://localhost:8000"
+DEFAULT_SERVER_URL = "http://localhost:8000" # Keep existing default or update if necessary
+SUPPORTED_FORMATS = ['.ply', '.ptx', '.xyz', '.pcd'] # Added PCD as a common format
 
-def upload_files(server_url: str, ptx_path: str, config_path: str) -> str | None:
-    """Uploads PTX and YAML config files to the server and returns the job ID."""
+def read_ptx_file(file_path: str) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    """
+    Read a PTX file and return points and colors (if available).
+    
+    PTX Format:
+    - Line 1-4: Scanner transformation matrix (4x4)
+    - Line 5: Number of columns (width)
+    - Line 6: Number of rows (height)
+    - Line 7-10: Scanner registration matrix (4x4)
+    - Line 11: Scanner position
+    - Line 12: Additional info
+    - Remaining lines: Point data (x, y, z, intensity, r, g, b)
+    
+    Args:
+        file_path: Path to the PTX file
+        
+    Returns:
+        Tuple containing:
+        - numpy array of shape (N, 3) containing point coordinates
+        - numpy array of shape (N, 3) containing RGB colors, or None if no colors
+    """
+    points = []
+    colors = []
+    
+    try:
+        with open(file_path, 'r') as f:
+            lines = [line.strip() for line in f.readlines()]
+            
+            if len(lines) < 12:  # Minimum header size
+                raise ValueError("PTX file too short")
+                
+            try:
+                # Parse transformation matrix (first 4 lines)
+                transform = np.zeros((4, 4))
+                for i in range(4):
+                    values = lines[i].split()
+                    if len(values) != 4:
+                        print(f"Warning: Invalid transform row {i+1}, using identity")
+                        transform[i, i] = 1.0
+                    else:
+                        try:
+                            transform[i] = [float(x) for x in values]
+                        except ValueError:
+                            print(f"Warning: Invalid numbers in transform row {i+1}, using identity")
+                            transform[i, i] = 1.0
+                            
+                # Get dimensions (lines 5-6)
+                width = int(float(lines[4].split()[0]))
+                height = int(float(lines[5].split()[0]))
+                print(f"PTX dimensions: {width}x{height} points")
+                
+            except (ValueError, IndexError) as e:
+                print(f"Warning: Error parsing header: {e}, attempting to continue")
+                width = height = 0
+            
+            # Skip registration matrix and position (7-11)
+            start_idx = 11  # Start of point data
+                
+            # Read points and optional colors
+            point_count = 0
+            for line_num, line in enumerate(lines[start_idx:], start=start_idx):
+                try:
+                    values = line.split()
+                    if len(values) < 3:  # Must have at least x,y,z
+                        continue
+                        
+                    # Try to parse point coordinates
+                    x, y, z = map(float, values[:3])
+                    points.append([x, y, z])
+                    point_count += 1
+                    
+                    # Check if we have RGB values (after intensity)
+                    if len(values) >= 7:
+                        try:
+                            # PTX format: x y z intensity r g b
+                            r = float(values[4])  # Usually 0-255
+                            g = float(values[5])
+                            b = float(values[6])
+                            # Normalize to 0-1 range if needed
+                            if max(r, g, b) > 1.0:
+                                r, g, b = r/255.0, g/255.0, b/255.0
+                            colors.append([r, g, b])
+                        except ValueError:
+                            # If color parsing fails, use default color
+                            if colors:
+                                colors.append([0.7, 0.7, 0.7])
+                    elif colors:  # If we have some colors but this point doesn't
+                        colors.append([0.7, 0.7, 0.7])  # Add default gray
+                        
+                    if point_count % 100000 == 0:
+                        print(f"Read {point_count} points...")
+                        
+                except ValueError as ve:
+                    print(f"Warning: Skipping invalid point at line {line_num}: {line.strip()}")
+                    continue
+                except Exception as e:
+                    print(f"Warning: Error processing line {line_num}: {e}")
+                    continue
+        
+        points_array = np.array(points)
+        colors_array = np.array(colors) if colors else None
+        
+        print(f"Successfully read {len(points)} points from {file_path}")
+        if colors_array is not None:
+            print(f"Including {len(colors)} color values")
+        
+        return points_array, colors_array
+        
+    except Exception as e:
+        print(f"Error reading PTX file {file_path}: {e}")
+        return np.array([]), None
+
+def read_point_cloud(file_path: str) -> o3d.geometry.PointCloud | None:
+    """Reads a point cloud file into an Open3D PointCloud object."""
+    try:
+        # Convert to string if it's a Path object
+        file_path = str(file_path)
+        if file_path.lower().endswith('.ptx'):
+            # Handle PTX files using our custom reader
+            points, colors = read_ptx_file(file_path)
+            if len(points) == 0:
+                print(f"Warning: No points found in {file_path}")
+                return None
+                
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(points)
+            if colors is not None:
+                pcd.colors = o3d.utility.Vector3dVector(colors)
+            
+            print(f"Successfully read {len(points)} points from PTX file {file_path}")
+            return pcd
+        else:
+            # Use Open3D's built-in reader for other formats
+            pcd = o3d.io.read_point_cloud(file_path)
+            if not pcd.has_points():
+                print(f"Warning: No points found in {file_path}")
+                return None
+            print(f"Successfully read {len(pcd.points)} points from {file_path}")
+            return pcd
+    except Exception as e:
+        print(f"Error reading point cloud file {file_path}: {e}")
+        return None
+
+def merge_point_clouds(pcd_files: List[str | Path]) -> o3d.geometry.PointCloud | None:
+    """
+    Merges multiple point cloud files into a single Open3D PointCloud object.
+    
+    Args:
+        pcd_files: List of file paths (strings or Path objects)
+        
+    Returns:
+        Merged point cloud or None if merging failed
+    """
+    merged_pcd = o3d.geometry.PointCloud()
+    all_points = []
+    all_colors = []
+    processed_files = []
+
+    for file_path in pcd_files:
+        str_path = str(file_path)  # Convert Path to string if needed
+        pcd = read_point_cloud(str_path)
+        if pcd and pcd.has_points():
+            all_points.append(np.asarray(pcd.points))
+            if pcd.has_colors():
+                all_colors.append(np.asarray(pcd.colors))
+            else:
+                # If a cloud has no colors, add default gray colors
+                default_color = np.full((len(pcd.points), 3), 0.7)
+                all_colors.append(default_color)
+            processed_files.append(str_path)
+
+    if not all_points:
+        print("No point clouds were successfully read. Cannot merge.")
+        return None
+
+    merged_pcd.points = o3d.utility.Vector3dVector(np.vstack(all_points))
+    
+    # Handle colors: if all clouds had colors and same dimensions, merge them
+    # This is a simplified approach. More robust color merging might be needed.
+    if all_colors and len(all_colors) == len(pcd_files) and all(len(c) == len(p) for c, p in zip(all_colors, all_points)):
+        try:
+            merged_pcd.colors = o3d.utility.Vector3dVector(np.vstack(all_colors))
+        except ValueError as e:
+            print(f"Could not merge colors due to dimension mismatch or other error: {e}. Proceeding without colors.")
+            merged_pcd.colors.clear()
+
+
+    print(f"Merged {len(pcd_files)} point clouds into one with {len(merged_pcd.points)} points.")
+    return merged_pcd
+
+def upload_files(server_url: str, merged_pcd_path: str | Path, config_path: str | Path) -> str | None:
+    """
+    Uploads the merged PLY point cloud and YAML config file to the server.
+    
+    Args:
+        server_url: URL of the Cloud2BIM server
+        merged_pcd_path: Path to the merged point cloud file (PLY format)
+        config_path: Path to the YAML configuration file
+        
+    Returns:
+        Job ID if successful, None otherwise
+    """
     upload_url = f"{server_url}/convert"
     
-    if not os.path.exists(ptx_path):
-        print(f"Error: Point cloud file not found at {ptx_path}")
+    # Convert paths to strings and check existence
+    pcd_path_str = str(merged_pcd_path)
+    config_path_str = str(config_path)
+    
+    if not os.path.exists(pcd_path_str):
+        print(f"Error: Merged point cloud file not found at {pcd_path_str}")
         return None
-    if not os.path.exists(config_path):
-        print(f"Error: Configuration file not found at {config_path}")
+    if not os.path.exists(config_path_str):
+        print(f"Error: Configuration file not found at {config_path_str}")
         return None
 
     try:
-        with open(ptx_path, 'rb') as ptx_file, open(config_path, 'rb') as config_file:
+        # The server endpoint will expect 'point_cloud_file' now
+        with open(merged_pcd_path, 'rb') as pcd_file, open(config_path, 'rb') as config_file_obj:
             files = {
-                'ptx_file': (os.path.basename(ptx_path), ptx_file, 'application/octet-stream'),
-                'config_file': (os.path.basename(config_path), config_file, 'application/x-yaml')
+                'point_cloud_file': (os.path.basename(merged_pcd_path), pcd_file, 'application/octet-stream'), # Sending as PLY
+                'config_file': (os.path.basename(config_path), config_file_obj, 'application/x-yaml')
             }
-            print(f"Uploading {ptx_path} and {config_path} to {upload_url}...")
-            response = requests.post(upload_url, files=files, timeout=30) # Added timeout
-            response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+            print(f"Uploading {merged_pcd_path} and {config_path} to {upload_url}...")
+            response = requests.post(upload_url, files=files, timeout=60) # Increased timeout for potentially larger merged file
+            response.raise_for_status()
             
             job_data = response.json()
             job_id = job_data.get("job_id")
@@ -65,7 +277,7 @@ def poll_job_status(server_url: str, job_id: str) -> dict | None:
                 return status_data
             
             time.sleep(5)  # Poll every 5 seconds
-        except requests.exceptions.RequestException as e:
+        except RequestException as e:
             print(f"Error polling status: {e}")
             return None
         except KeyboardInterrupt:
@@ -87,7 +299,7 @@ def download_result_file(server_url: str, job_id: str, filename: str, output_dir
                 f.write(chunk)
         print(f"Successfully downloaded {filename} to {output_path}")
         return True
-    except requests.exceptions.RequestException as e:
+    except RequestException as e:
         print(f"Error downloading {filename}: {e}")
         if hasattr(e, 'response') and e.response is not None:
             try:
@@ -101,31 +313,85 @@ def download_result_file(server_url: str, job_id: str, filename: str, output_dir
 
 def main():
     parser = argparse.ArgumentParser(description="CLI client for the Cloud2BIM service.")
-    parser.add_argument("ptx_file", help="Path to the .ptx or .xyz point cloud file.")
+    parser.add_argument("point_cloud_files", nargs='+', help=f"Path(s) to point cloud file(s). Supported formats: {SUPPORTED_FORMATS}")
     parser.add_argument("config_file", help="Path to the .yaml configuration file.")
     parser.add_argument("--server_url", default=DEFAULT_SERVER_URL, help=f"URL of the Cloud2BIM server (default: {DEFAULT_SERVER_URL}).")
     parser.add_argument("--output_dir", default=".", help="Directory to save downloaded result files (default: current directory).")
+    parser.add_argument("--merged_output_filename", default="merged_point_cloud.ply", help="Filename for the temporary merged PLY file (default: merged_point_cloud.ply).")
 
     args = parser.parse_args()
 
     print(f"Using Cloud2BIM server at: {args.server_url}")
 
-    # 1. Upload files and get job ID
-    job_id = upload_files(args.server_url, args.ptx_file, args.config_file)
+    # Validate point cloud files
+    valid_pcd_files = []
+    for f_path in args.point_cloud_files:
+        if not os.path.exists(f_path):
+            print(f"Error: Point cloud file not found at {f_path}")
+            continue
+        if not any(f_path.lower().endswith(ext) for ext in SUPPORTED_FORMATS):
+            print(f"Error: Unsupported file format for {f_path}. Supported are: {SUPPORTED_FORMATS}")
+            continue
+        valid_pcd_files.append(f_path)
+
+    if not valid_pcd_files:
+        print("No valid point cloud files provided. Exiting.")
+        return
+    
+    if not os.path.exists(args.config_file):
+        print(f"Error: Configuration file not found at {args.config_file}")
+        return
+
+    # 1. Merge point clouds if multiple are provided, or prepare single file
+    merged_pcd = None
+    if len(valid_pcd_files) > 1:
+        print(f"Merging {len(valid_pcd_files)} point cloud files...")
+        merged_pcd = merge_point_clouds(valid_pcd_files)
+        if not merged_pcd:
+            print("Failed to merge point clouds. Exiting.")
+            return
+    elif len(valid_pcd_files) == 1:
+        print(f"Processing single point cloud file: {valid_pcd_files[0]}")
+        merged_pcd = read_point_cloud(valid_pcd_files[0])
+        if not merged_pcd:
+            print(f"Failed to read point cloud file {valid_pcd_files[0]}. Exiting.")
+            return
+    
+    # Save merged/single PCD to a temporary PLY file for upload
+    # Using a temporary file to ensure it's cleaned up
+    with tempfile.NamedTemporaryFile(suffix=".ply", delete=False) as tmp_ply_file:
+        temp_ply_path = tmp_ply_file.name
+    
+    try:
+        if not o3d.io.write_point_cloud(temp_ply_path, merged_pcd, write_ascii=False): # Binary PLY is more compact
+            print(f"Error: Failed to write merged point cloud to {temp_ply_path}")
+            return
+        print(f"Merged point cloud saved temporarily to {temp_ply_path}")
+
+        # 2. Upload files and get job ID
+        # The upload_files function now takes the path to the (potentially merged) PLY file
+        job_id = upload_files(args.server_url, temp_ply_path, args.config_file)
+    finally:
+        # Clean up the temporary file
+        if os.path.exists(temp_ply_path):
+            os.remove(temp_ply_path)
+            print(f"Cleaned up temporary file {temp_ply_path}")
+
     if not job_id:
         print("Failed to start conversion job. Exiting.")
         return
 
-    # 2. Poll for job status
+    # 3. Poll for job status
     status_data = poll_job_status(args.server_url, job_id)
     if not status_data:
         print("Failed to get final job status. Exiting.")
         return
 
-    # 3. If completed, download results
+    # 4. If completed, download results
     if status_data.get("status") == "completed":
         print("Job completed successfully. Downloading results...")
         ifc_downloaded = download_result_file(args.server_url, job_id, "model.ifc", args.output_dir)
+        # Assuming point_mapping.json is still a relevant output
         mapping_downloaded = download_result_file(args.server_url, job_id, "point_mapping.json", args.output_dir)
         
         if ifc_downloaded:
@@ -133,7 +399,8 @@ def main():
         if mapping_downloaded:
             print(f"Point mapping saved as {job_id}_point_mapping.json in {os.path.abspath(args.output_dir)}")
     elif status_data.get("status") == "failed":
-        print(f"Job failed: {status_data.get('message', 'No specific error message.')}")
+        error_message = status_data.get('error', status_data.get('message', 'No specific error message.'))
+        print(f"Job failed: {error_message}")
     else:
         print("Job did not complete successfully. No results to download.")
 

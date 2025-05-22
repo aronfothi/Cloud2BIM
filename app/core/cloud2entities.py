@@ -1,603 +1,638 @@
-from app.core.aux_functions import *
-from app.core.generate_ifc import IFCmodel
-from app.core.space_generator import *
+from .aux_functions import load_config_and_variables # Removed log_message
+from .generate_ifc import IFCmodel
+from .space_generator import identify_zones # Keep direct import if it's a standalone function
+# Import other necessary functions from aux_functions or other modules if they are not part of a class yet
+# e.g., from .aux_functions import read_e57, e57_data_to_xyz, load_xyz_file
+# e.g., from .point_cloud import identify_slabs, identify_walls, identify_openings (if these become methods of a PointCloud class later)
+
 import numpy as np
-import open3d as o3d
-import logging
-from typing import Dict, List, Any
-from dataclasses import dataclass
-from sklearn.cluster import DBSCAN
+import time
+import os
+import logging # Use standard logging
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class WallParams:
-    min_height: float
-    min_width: float
-    thickness: float
-
-@dataclass
-class SlabParams:
-    min_area: float
-    thickness: float
-
-@dataclass
-class OpeningParams:
-    min_width: float
-    min_height: float
-
-# === Load Configuration ===
-config = load_config_and_variables()
-
-# === Assign variables ===
-e57_input = config["e57_input"]
-if e57_input:
-    e57_file_names = config["e57_file_names"]
-xyz_filenames = config["xyz_filenames"]
-exterior_scan = config["exterior_scan"]
-dilute_pointcloud = config["dilute_pointcloud"]
-dilution_factor = config["dilution_factor"]
-pc_resolution = config["pc_resolution"]
-grid_coefficient = config["grid_coefficient"]
-
-bfs_thickness = config["bfs_thickness"]
-tfs_thickness = config["tfs_thickness"]
-
-min_wall_length = config["min_wall_length"]
-min_wall_thickness = config["min_wall_thickness"]
-max_wall_thickness = config["max_wall_thickness"]
-exterior_walls_thickness = config["exterior_walls_thickness"]
-
-ifc_output_file = config["ifc_output_file"]
-ifc_project_name = config["ifc_project_name"]
-ifc_project_long_name = config["ifc_project_long_name"]
-ifc_project_version = config["ifc_project_version"]
-
-ifc_author_name = config["ifc_author_name"]
-ifc_author_surname = config["ifc_author_surname"]
-ifc_author_organization = config["ifc_author_organization"]
-
-ifc_building_name = config["ifc_building_name"]
-ifc_building_type = config["ifc_building_type"]
-ifc_building_phase = config["ifc_building_phase"]
-
-ifc_site_latitude = config["ifc_site_latitude"]
-ifc_site_longitude = config["ifc_site_longitude"]
-ifc_site_elevation = config["ifc_site_elevation"]
-material_for_objects = config["material_for_objects"]
-
-# === Static Settings ===
-# colours for model
-door_colour_rgb = (0.541, 0.525, 0.486)
-window_colour_rgb = (0.761, 0.933, 1.0)
-column_colour_rgb = (0.596,0.576,1.0)
-beam_colour_rgb =  (0.157,0.478,0.0)
-stair_colour_rgb = (0.992, 0.270, 0.153)
-
-# === Logger ===
-last_time = time.time()
-log_filename = "log.txt"
-
-# SECTION: Import Point Clouds
-
-# read e57 files and create xyz
-if e57_input:
-    for (idx, e57_file_name) in enumerate(e57_file_names):
-        last_time = log('Reading %s.' % e57_file_name, last_time, log_filename)
-        imported_e57_data = read_e57(e57_file_name)
-        e57_data_to_xyz(imported_e57_data, xyz_filenames[idx], chunk_size=1e10)
-        last_time = log('File %s converted to ASCII format, saved as %s.' % (e57_file_name, xyz_filenames[idx]),
-                        last_time, log_filename)
-
-# read xyz file
-points_xyz, points_rgb = np.empty((0, 3)), np.empty((0, 3))
-for xyz_filename in xyz_filenames:
-    last_time = log('Extracting data from %s...' % xyz_filename, last_time, log_filename)
-    points_xyz_temp, points_rgb_temp = load_xyz_file(xyz_filename, plot_xyz=False, select_ith_lines=dilute_pointcloud,
-                                                     ith_lines=dilution_factor)
-    points_xyz = np.vstack((points_xyz, np.array(points_xyz_temp)))
-    # points_rgb = np.vstack((points_rgb, np.array(points_rgb_temp)))
-points_xyz = np.round(points_xyz, 3)  # round the xyz coordinates to 3 decimals
-last_time = log('All point cloud data imported.', last_time, log_filename)
-
-# SECTION: Segment Slabs and Split the Point Cloud to Storeys
-print("-" * 50)
-print("Slab segmentation")
-print("-" * 50)
-# scan the model along the z-coordinate and search for planes parallel to xy-plane
-slabs, horizontal_surface_planes = identify_slabs(points_xyz, points_rgb, bfs_thickness,
-                                                  tfs_thickness, z_step=0.15,
-                                                  pc_resolution=pc_resolution,
-                                                  plot_segmented_plane=False)  # plot with open 3D
-
-# SECTION: Segment Walls and Classify Openings
-print("-" * 50)
-print("Wall segmentation")
-print("-" * 50)
-
-# merge_horizontal_pointclouds_in_storey(horizontal_surface_planes)
-point_cloud_storeys = split_pointcloud_to_storeys(points_xyz, slabs)
-# display_cross_section_plot(point_cloud_storeys, slabs)
-walls, all_openings, zones = [], [], []
-wall_id = 0
-for i, storey_pointcloud in enumerate(point_cloud_storeys):
-
-    if exterior_scan:
-        z_placement = slabs[i]['slab_bottom_z_coord'] + slabs[i]['thickness']
-        wall_height = slabs[i + 1]['slab_bottom_z_coord'] - z_placement
-    else:
-        if i == 0:
-            z_placement = slabs[i]['slab_bottom_z_coord']
-            if i == len(point_cloud_storeys) - 1:
-                wall_height = slabs[i + 1]['slab_bottom_z_coord'] - z_placement + tfs_thickness
-            else:
-                wall_height = slabs[i + 1]['slab_bottom_z_coord'] - z_placement
-        elif i == len(point_cloud_storeys) - 1:
-            z_placement = slabs[i]['slab_bottom_z_coord'] + slabs[i]['thickness']
-            wall_height = slabs[i + 1]['slab_bottom_z_coord'] - z_placement + tfs_thickness
-        else:
-            z_placement = slabs[i]['slab_bottom_z_coord'] + slabs[i]['thickness']
-            wall_height = slabs[i + 1]['slab_bottom_z_coord'] - z_placement + slabs[i + 1]['thickness']
-
-    top_z_placement = slabs[i + 1]['slab_bottom_z_coord']
-
-    (start_points, end_points, wall_thicknesses, wall_materials,
-     translated_filtered_rotated_wall_groups, wall_labels) = (
-        identify_walls(storey_pointcloud, pc_resolution, min_wall_length, min_wall_thickness, max_wall_thickness,
-                       z_placement, top_z_placement, grid_coefficient, slabs[i + 1]['polygon'], exterior_scan,
-                       exterior_walls_thickness=0.45))
-
-    print("-" * 50)
-    print("Rectangular openings detection")
-    print("-" * 50)
-    for j in range(len(start_points)):
-        wall_id += 1
-        walls.append({'wall_id': wall_id, 'storey': i + 1, 'start_point': start_points[j], 'end_point': end_points[j],
-                      'thickness': wall_thicknesses[j], 'material': wall_materials[j], 'z_placement': z_placement,
-                      'height': wall_height, 'label': wall_labels[j]})
-
-        (opening_widths, opening_heights,
-         opening_types) = identify_openings(j + 1, translated_filtered_rotated_wall_groups[j],
-                                            wall_labels[j], pc_resolution, grid_coefficient,
-                                            min_opening_width=0.4, min_opening_height=0.6,
-                                            max_opening_aspect_ratio=4, door_z_max=0.1,
-                                            door_min_height=1.6, opening_min_z_top=1.6,
-                                            plot_histograms_for_openings=False)
-
-        # Temporary list to store openings for the current wall
-        wall_openings = []
-
-        # Iterate through the detected openings and store the information
-        for (x_start, x_end), (z_min, z_max), opening_type in zip(opening_widths, opening_heights, opening_types):
-            opening_info = {
-                "opening_wall_id": wall_id,
-                "opening_type": opening_type,
-                "x_range_start": x_start,
-                "x_range_end": x_end,
-                "z_range_min": z_min,
-                "z_range_max": z_max
-            }
-            # Append the current opening's information to the wall's openings list
-            wall_openings.append(opening_info)
-
-        # After processing all openings for the current wall, append them to the all_openings list
-        all_openings.extend(wall_openings)
-
-        # Print or further process the results
-        print(f"Wall {j + 1}:")
-        for (x_start, x_end), (z_min, z_max), opening_type in zip(opening_widths, opening_heights, opening_types):
-            print(
-                f"Opening ({opening_type:s}): X-Range: {x_start:.2f} to {x_end:.2f}, Z-Range: {z_min:.2f} to {z_max:.2f}")
-        print("-" * 50)
-
-    # SECTION: Split the Storeys to Zones (Spaces in the IFC)
-    print('Segmenting the storey to zones (spaces)...')
-    print("-" * 50)
-    zones_in_storey = identify_zones(walls, snapping_distance=0.8, plot_zones=False)
-    zones.append(zones_in_storey)
-
-# SECTION: Generate IFC
-print("-" * 50)
-print("Generating IFC model")
-print("-" * 50)
-ifc_model = IFCmodel(ifc_project_name, ifc_output_file)
-ifc_model.define_author_information(ifc_author_name + ' ' + ifc_author_surname, ifc_author_organization)
-ifc_model.define_project_data(ifc_building_name, ifc_building_type, ifc_building_phase,
-                              ifc_project_long_name, ifc_project_version, ifc_author_organization,
-                              ifc_author_name, ifc_author_surname, ifc_site_latitude, ifc_site_longitude,
-                              ifc_site_elevation)
-
-# Add building storeys and zones
-storeys_ifc, slabs_ifc = [], []
-for idx, slab in enumerate(slabs):
-    # define a storey
-    slab_position = slab['slab_bottom_z_coord'] + slab['thickness']
-    storeys_ifc.append(ifc_model.create_building_storey('Floor %.1f m' % slab_position, slab_position))
-
-    # define a slab
-    # Convert separate x and y coordinate lists into a list of coordinate pairs
-    points = [[float(x), float(y)] for x, y in zip(slab['polygon_x_coords'], slab['polygon_y_coords'])]
-
-    # Optionally remove duplicate points to avoid redundancy in the polygon
-    # This example uses a simple method by converting each pair into a tuple and then back into a list.
-    points_no_duplicates = list(dict.fromkeys(tuple(pt) for pt in points))
-    points_no_duplicates = [list(pt) for pt in points_no_duplicates]
-
-    # The create_slab function internally creates the slab placement, extrusion, and shape representation.
-    slab_entity = ifc_model.create_slab(
-        slab_name='Slab %d' % (idx + 1),
-        points=points_no_duplicates,
-        slab_z_position=round(slab['slab_bottom_z_coord'], 3),
-        slab_height=round(slab['thickness'], 3),
-        material_name=material_for_objects
-    )
-
-    ifc_model.assign_product_to_storey(slab_entity, storeys_ifc[-1])
-
-    # IfcSpace initialization
-    if idx < len(zones) and zones[idx]:  # this means there are some zones inside
-        ifc_space_placement = ifc_model.space_placement(slab_position)
-        if idx != len(slabs) - 1:  # avoid creating zones on the uppermost slab
-            zone_number = 1
-            for space_name, space_data in zones[idx].items():
-                ifc_space = ifc_model.create_space(
-                    space_data,
-                    ifc_space_placement,
-                    (idx + 1),
-                    zone_number,
-                    storeys_ifc[-1],
-                    space_data["height"]
-                )
-                zone_number += 1
-    else:
-        continue
-
-'''# Column definition for IFC
-columns_example = [
-    {
-        "name": "round", # other classes "rect", "steel"
-        "storey": 1,
-        "start_point": (0.0, 0.0),  # Only X, Y coordinates
-        "direction": (0.2, 0.5),  # Direction only in X, Y plane
-        "profile_points": [0.3],  # Square profile [-0.1, -0.1], [0.3, 0.0], [0.3, 0.3], [0.0, 0.3]
-        "height": 3.0
-    }
-]
-
-column_material, column_material_def_rep= ifc_model.create_material_with_color("Column material",
-                                                                               column_colour_rgb, transparency=0)
-column_id=1
-for column in columns_example:
-    ifc_column = ifc_model.create_column(f"C{column_id:02d}", column['name'], storeys_ifc[column['storey'] - 1], column['start_point'],
-                                         column['direction'], column['profile_points'], column['height'])
-    ifc_model.assign_material(ifc_column, column_material)
-    column_id +=1
-
-# Beams definition for IFC
-# Example input parameters
-beams_example = [
-    {
-        "name": "rect",      # A rectangular beam with larger dimensions
-        "storey": 2,               # Placed on the second storey
-        "start_point": (10.0, 5.0),  # X, Y placement
-        "direction": (0.0, -1.0),    # Beam axis direction in XY plane (pointing in negative Y)
-        "profile_points": [0.5, 0.7],# Width and height for 'rect'
-        "length": 8.0              # Extrusion length along the proper axis (e.g., Z-axis after correction)
-    },
-    {
-        "name": "steel",    # A steel beam with a custom I-shaped profile
-        "storey": 2,               # Placed on the second storey
-        "start_point": (12.0, 6.0),  # X, Y placement
-        "direction": (0.5, 0.5),     # Beam axis direction in XY plane
-        "profile_points": [[-0.2, -0.225], [0.2, -0.225], [0.2, -0.165], [0.05, -0.165],
-                           [0.05, 0.125], [0.2, 0.125], [0.2, 0.225], [-0.2, 0.225],
-                           [-0.2, 0.125], [-0.05, 0.125], [-0.05, -0.165], [-0.2, -0.165],
-                           [-0.2, -0.225]],
-        "length": 10.0             # Extrusion length
-    }
-]
-beam_material, beam_material_def_rep= ifc_model.create_material_with_color("beam material",
-                                                                           beam_colour_rgb)
-beam_id=1
-for beam in beams_example:
-    ifc_model.create_beam(f"B{beam_id:02d}",beam["name"],storeys_ifc[beam["storey"] - 1],beam["start_point"],
-                          beam["direction"],beam["profile_points"],beam["length"],beam_material)
-    beam_id +=1'''
-
-'''# Stairs definition for IFC
-stairs = [
-    [  # Curved stair
-        {
-            "key": "flight_curved",
-            "origin": (0.0, 0.0, 0.0),
-            "num_risers": 12,
-            "raiser_height": 0.17,
-            "angle_per_step_deg": 15,
-            "inner_radius": 1.0,
-            "flight_width": 1.2,
-            "storey": 1
-        }
-    ]
-]
-
-stair_material, stair_material_def_rep= ifc_model.create_material_with_color("Stair material",
-                                                                               stair_colour_rgb, transparency=0)
-
-for i, stair_parts in enumerate(stairs):
-    stair_name = f"Stair_{i+1:03}"
-    stair = ifc_model.create_stair(stair_name, storeys_ifc[stair_parts[0]["storey"] - 1], stair_parts, stair_material)
-'''
-# Wall definition for IFC
-for wall in walls:
-    start_point = tuple(float(num) for num in wall['start_point'])
-    end_point = tuple(float(num) for num in wall['end_point'])
-    if start_point == end_point:
-        continue
-    wall_thickness = wall['thickness']
-    wall_material = wall['material']
-    wall_z_placement = wall['z_placement']
-    wall_heights = wall['height']
-    wall_label = wall['label']
-
-    wall_openings = [opening for opening in all_openings if opening['opening_wall_id'] == wall['wall_id']]
-
-    # Create a material layer
-    material_layer = ifc_model.create_material_layer(wall_thickness, wall_material)
-    # Create an IfcMaterialLayerSet using the material layer (in a list)
-    material_layer_set = ifc_model.create_material_layer_set([material_layer])
-    # Create an IfcMaterialLayerSetUsage and associate it with the element or product
-    material_layer_set_usage = ifc_model.create_material_layer_set_usage(material_layer_set, wall_thickness)
-    # Local placement
-    wall_placement = ifc_model.wall_placement(wall['z_placement'])
-    wall_axis_placement = ifc_model.wall_axis_placement(start_point, end_point)
-    wall_axis_representation = ifc_model.wall_axis_representation(wall_axis_placement)
-    wall_swept_solid_representation = ifc_model.wall_swept_solid_representation(start_point, end_point, wall_heights,
-                                                                                wall_thickness)
-    product_definition_shape = ifc_model.product_definition_shape(wall_axis_representation,
-                                                                  wall_swept_solid_representation)
-    current_story = wall['storey']
-    wall = ifc_model.create_wall(wall_placement, product_definition_shape)
-    assign_material = ifc_model.assign_material(wall, material_layer_set_usage)
-    wall_type = ifc_model.create_wall_type(wall, wall_thickness)
-    assign_material_2 = ifc_model.assign_material(wall_type[0], material_layer_set)
-    assign_object = ifc_model.assign_product_to_storey(wall, storeys_ifc[current_story - 1])
-    wall_ext_int_parameter = ifc_model.create_property_single_value("IsExternal",wall_label == 'exterior')
-    ifc_model.create_property_set(wall, wall_ext_int_parameter, 'wall properties')
-
-    # Create materials
-    window_material, window_material_def_rep = ifc_model.create_material_with_color(
-        'Window material',
-        window_colour_rgb,
-        transparency=0.7
-    )
-
-    door_material, door_material_def_rep = ifc_model.create_material_with_color(
-        'Door material',
-        door_colour_rgb
-    )
-
-    # Initialize ID counters
-    window_id = 1
-    door_id = 1
-
-    for opening in wall_openings:
-        # Each 'opening' is a dictionary with the opening data
-        opening_type = opening['opening_type']
-        x_range_start = opening['x_range_start']
-        x_range_end = opening['x_range_end']
-        z_range_min = opening['z_range_min']
-        z_range_max = opening['z_range_max']
-
-        # Assign unique ID based on opening type
-        if opening_type == "window":
-            opening_id = f"W{window_id:02d}"  # Format as W01, W02, ...
-            window_id += 1
-        elif opening_type == "door":
-            opening_id = f"D{door_id:02d}"  # Format as D01, D02, ...
-            door_id += 1
-        else:
-            print(f"Warning: Unknown opening type: {opening_type}, skipping this opening")
-            continue
-
-        # Store the ID in the opening dictionary
-        opening['wall_id'] = opening_id
-
-        opening_width = x_range_end - x_range_start
-        opening_height = z_range_max - z_range_min
-        window_sill_height = z_range_min
-        offset_from_start = x_range_start
-
-        opening_closed_profile = ifc_model.opening_closed_profile_def(float(opening_width), wall_thickness)
-        opening_placement = ifc_model.opening_placement(start_point, wall_placement)
-        opening_extrusion = ifc_model.opening_extrusion(opening_closed_profile, float(opening_height), start_point,
-                                                        end_point, float(window_sill_height), float(offset_from_start))
-        opening_representation = ifc_model.opening_representation(opening_extrusion)
-        opening_product_definition = ifc_model.product_definition_shape_opening(opening_representation)
-        wall_opening = ifc_model.create_wall_opening(opening_placement[1], opening_product_definition)
-        rel_voids_element = ifc_model.create_rel_voids_element(wall, wall_opening)
-        if opening_type == "window":
-            window_closed_profile = ifc_model.opening_closed_profile_def(float(opening_width), 0.01)
-            window_extrusion = ifc_model.opening_extrusion(window_closed_profile, float(opening_height), start_point,
-                                                           end_point, float(window_sill_height), float(offset_from_start))
-            window_representation = ifc_model.opening_representation(window_extrusion)
-            window_product_definition = ifc_model.product_definition_shape_opening(window_representation)
-            window = ifc_model.create_window(opening_placement[1], window_product_definition, opening_id)
-            window_type = ifc_model.create_window_type()
-            ifc_model.create_rel_defines_by_type(window, window_type)
-            ifc_model.create_rel_fills_element(wall_opening, window)
-            ifc_model.assign_product_to_storey(window, storeys_ifc[current_story - 1])
-            ifc_model.assign_material(window, window_material)
-        elif opening_type == "door":
-            door_closed_profile = ifc_model.opening_closed_profile_def(float(opening_width), 0.01)
-            door_extrusion = ifc_model.opening_extrusion(door_closed_profile, float(opening_height), start_point,
-                                                         end_point, float(window_sill_height), float(offset_from_start))
-            door_representation = ifc_model.opening_representation(door_extrusion)
-            door_product_definition = ifc_model.product_definition_shape_opening(door_representation)
-            door = ifc_model.create_door(opening_placement[1], door_product_definition, opening_id)
-            ifc_model.create_rel_fills_element(wall_opening, door)
-            ifc_model.assign_product_to_storey(door, storeys_ifc[current_story - 1])
-            ifc_model.assign_material(door, door_material)
-
-# Write the IFC model to a file
-ifc_model.write()
-last_time = log('\nIFC model saved to %s.' % ifc_output_file, last_time, log_filename)
-
-def process_point_cloud(pcd: o3d.geometry.PointCloud, voxel_size: float, noise_threshold: float) -> o3d.geometry.PointCloud:
+class CloudToBimProcessor:
     """
-    Preprocess point cloud by downsampling and removing noise.
+    Processes a 3D point cloud file and converts it into an IFC BIM model.
     """
-    # Downsample using voxel grid
-    downsampled = pcd.voxel_down_sample(voxel_size=voxel_size)
-    
-    # Remove noise using statistical outlier removal
-    cleaned, _ = downsampled.remove_statistical_outlier(
-        nb_neighbors=20,
-        std_ratio=noise_threshold
-    )
-    
-    return cleaned
+    def __init__(self, job_id: str, config_data: dict, input_dir: str, output_dir: str):
+        """
+        Initializes the CloudToBimProcessor.
 
-def detect_walls(pcd: o3d.geometry.PointCloud, params: Dict) -> List[Dict]:
-    """
-    Detect walls in the point cloud using vertical plane detection.
-    """
-    walls = []
-    points = np.asarray(pcd.points)
-    
-    # Use RANSAC to detect vertical planes
-    plane_model, inliers = pcd.segment_plane(
-        distance_threshold=params["thickness"] / 2,
-        ransac_n=3,
-        num_iterations=1000
-    )
-    
-    # Extract wall points
-    wall_points = points[inliers]
-    
-    # Cluster wall points to separate different walls
-    clusters = DBSCAN(
-        eps=params["thickness"],
-        min_samples=50
-    ).fit(wall_points)
-    
-    # Process each cluster as a potential wall
-    for cluster_id in np.unique(clusters.labels_):
-        if cluster_id == -1:  # Skip noise
-            continue
-            
-        cluster_points = wall_points[clusters.labels_ == cluster_id]
+        Args:
+            job_id: The unique identifier for the job.
+            config_data: A dictionary containing the job-specific configuration.
+            input_dir: The directory containing input files for the job.
+            output_dir: The directory where output files will be saved.
+        """
+        self.job_id = job_id
+        self.config = config_data
+        self.input_dir = input_dir
+        self.output_dir = output_dir
+        self.log_filename = os.path.join(self.output_dir, f"{self.job_id}_processing.log")
+        self._setup_logging()
+
+        # Assign variables from config
+        self._assign_config_variables()
+
+        self.points_xyz = np.empty((0, 3))
+        self.points_rgb = np.empty((0, 3)) # If RGB is used
+        self.slabs = []
+        self.walls = []
+        self.all_openings = []
+        self.zones = []
+        self.ifc_model = None
+        self.last_time = time.time()
+
+    def _setup_logging(self):
+        """Sets up logging for the processor instance."""
+        # Using the module-level logger defined as "logger" at the top of the file.
+        # If job-specific file logging is needed, it would be configured here.
+        # For now, all logs from this processor will go to the handlers configured for the module logger.
+        pass
+
+    def _log(self, message: str, level: str = "info"):
+        """Logs a message using the module-level logger and updates the last_time."""
+        log_func = getattr(logger, level.lower(), logger.info) # Default to info if level is invalid
+        log_func(f"Job {self.job_id}: {message}")
+        current_time = time.time()
+        elapsed = current_time - self.last_time
+        logger.debug(f"Job {self.job_id}: Time since last log: {elapsed:.2f}s")
+        self.last_time = current_time
+
+    def _assign_config_variables(self):
+        """Assigns configuration variables to instance attributes."""
+        self.e57_input = self.config.get("e57_input", False)
+        self.e57_file_names = self.config.get("e57_file_names", [])
+        # Ensure xyz_filenames corresponds to actual files in input_dir for the job
+        # This might need adjustment based on how files are named/provided for a job
+        self.xyz_filenames = [os.path.join(self.input_dir, f) for f in self.config.get("xyz_filenames", [])]
+        self.ptx_filepath = self.config.get("ptx_file_path") # Assuming this is passed in config_data by job_processor
+
+        self.exterior_scan = self.config.get("exterior_scan", False)
+        self.dilute_pointcloud = self.config.get("dilute_pointcloud", False)
+        self.dilution_factor = self.config.get("dilution_factor", 1)
+        self.pc_resolution = self.config.get("pc_resolution", 0.05)
+        self.grid_coefficient = self.config.get("grid_coefficient", 3)
+
+        self.bfs_thickness = self.config.get("bfs_thickness", 0.2)
+        self.tfs_thickness = self.config.get("tfs_thickness", 0.2)
+
+        self.min_wall_length = self.config.get("min_wall_length", 0.5)
+        self.min_wall_thickness = self.config.get("min_wall_thickness", 0.08)
+        self.max_wall_thickness = self.config.get("max_wall_thickness", 0.5)
+        self.exterior_walls_thickness = self.config.get("exterior_walls_thickness", 0.3)
+
+        # Output IFC file path will be determined by job_id and output_dir
+        self.ifc_output_file = os.path.join(self.output_dir, "model.ifc")
+        self.ifc_project_name = self.config.get("ifc_project_name", "Cloud2BIM Project")
+        self.ifc_project_long_name = self.config.get("ifc_project_long_name", "Generated by Cloud2BIM")
+        self.ifc_project_version = self.config.get("ifc_project_version", "1.0")
+
+        self.ifc_author_name = self.config.get("ifc_author_name", "Cloud2BIM")
+        self.ifc_author_surname = self.config.get("ifc_author_surname", "System")
+        self.ifc_author_organization = self.config.get("ifc_author_organization", "Automated Process")
+
+        self.ifc_building_name = self.config.get("ifc_building_name", "Building")
+        self.ifc_building_type = self.config.get("ifc_building_type", "DefaultBuilding")
+        self.ifc_building_phase = self.config.get("ifc_building_phase", "Modelling")
+
+        self.ifc_site_latitude = self.config.get("ifc_site_latitude", [0,0,0,0])
+        self.ifc_site_longitude = self.config.get("ifc_site_longitude", [0,0,0,0])
+        self.ifc_site_elevation = self.config.get("ifc_site_elevation", 0.0)
+        self.material_for_objects = self.config.get("material_for_objects", "DefaultMaterial")
         
-        # Calculate wall dimensions
-        height = np.max(cluster_points[:, 2]) - np.min(cluster_points[:, 2])
-        width = np.max(np.linalg.norm(cluster_points[:, :2], axis=1))
-        
-        if height >= params["min_height"] and width >= params["min_width"]:
-            walls.append({
-                "type": "wall",
-                "geometry": cluster_points,
-                "properties": {
-                    "height": height,
-                    "width": width,
-                    "thickness": params["thickness"]
-                },
-                "point_indices": inliers[clusters.labels_ == cluster_id].tolist()
-            })
-    
-    return walls
+        # Static Settings (can remain as constants or be part of config)
+        self.door_colour_rgb = self.config.get("door_colour_rgb", (0.541, 0.525, 0.486))
+        self.window_colour_rgb = self.config.get("window_colour_rgb", (0.761, 0.933, 1.0))
+        self.column_colour_rgb = self.config.get("column_colour_rgb", (0.596,0.576,1.0))
+        self.beam_colour_rgb =  self.config.get("beam_colour_rgb", (0.157,0.478,0.0))
+        self.stair_colour_rgb = self.config.get("stair_colour_rgb", (0.992, 0.270, 0.153))
 
-def detect_slabs(pcd: o3d.geometry.PointCloud, params: Dict) -> List[Dict]:
-    """
-    Detect floor and ceiling slabs using horizontal plane detection.
-    """
-    slabs = []
-    points = np.asarray(pcd.points)
-    
-    # Find horizontal planes
-    plane_model, inliers = pcd.segment_plane(
-        distance_threshold=params["thickness"] / 2,
-        ransac_n=3,
-        num_iterations=1000
-    )
-    
-    # Extract slab points
-    slab_points = points[inliers]
-    
-    # Project points to XY plane and calculate area
-    xy_points = slab_points[:, :2]
-    hull = ConvexHull(xy_points)
-    area = hull.area
-    
-    if area >= params["min_area"]:
-        slabs.append({
-            "type": "slab",
-            "geometry": slab_points,
-            "properties": {
-                "area": area,
-                "thickness": params["thickness"],
-                "elevation": np.mean(slab_points[:, 2])
-            },
-            "point_indices": inliers.tolist()
-        })
-    
-    return slabs
+    def _load_and_prepare_point_cloud(self):
+        """Loads point cloud data from E57 or XYZ files."""
+        from .aux_functions import read_e57, e57_data_to_xyz, load_xyz_file # Local import if heavy or specific
 
-def detect_openings(pcd: o3d.geometry.PointCloud, walls: List[Dict], params: Dict) -> List[Dict]:
-    """
-    Detect openings (windows/doors) in walls using point density analysis.
-    """
-    openings = []
-    
-    for wall in walls:
-        wall_points = wall["geometry"]
-        
-        # Project wall points to 2D
-        wall_2d = wall_points[:, :2]
-        
-        # Create density map
-        density = gaussian_kde(wall_2d.T)(wall_2d.T)
-        
-        # Find regions with low density (potential openings)
-        low_density = density < np.mean(density) - np.std(density)
-        
-        if np.any(low_density):
-            opening_points = wall_points[low_density]
-            
-            # Calculate opening dimensions
-            height = np.max(opening_points[:, 2]) - np.min(opening_points[:, 2])
-            width = np.max(np.linalg.norm(opening_points[:, :2], axis=1))
-            
-            if height >= params["min_height"] and width >= params["min_width"]:
-                opening_type = "door" if np.min(opening_points[:, 2]) < 0.1 else "window"
+        self._log(f"Starting point cloud loading for job {self.job_id}")
+
+        if self.e57_input:
+            for (idx, e57_file_name_short) in enumerate(self.e57_file_names):
+                e57_file_path = os.path.join(self.input_dir, e57_file_name_short)
+                if not os.path.exists(e57_file_path):
+                    self._log(f"Warning: E57 file {e57_file_path} not found. Skipping.")
+                    continue
+                self._log(f'Reading {e57_file_path}.')
+                imported_e57_data = read_e57(e57_file_path)
                 
-                openings.append({
-                    "type": opening_type,
-                    "geometry": opening_points,
-                    "properties": {
-                        "height": height,
-                        "width": width,
-                        "wall_id": wall["id"]
-                    },
-                    "point_indices": np.where(low_density)[0].tolist()
-                })
-    
-    return openings
+                # Define XYZ output path within the job's input directory
+                xyz_output_filename = os.path.splitext(e57_file_name_short)[0] + ".xyz"
+                xyz_output_path = os.path.join(self.input_dir, xyz_output_filename)
+                
+                e57_data_to_xyz(imported_e57_data, xyz_output_path, chunk_size=1e10)
+                self._log(f'File {e57_file_path} converted to ASCII format, saved as {xyz_output_path}.')
+                # Add this newly created xyz file to the list to be processed
+                if xyz_output_path not in self.xyz_filenames:
+                    self.xyz_filenames.append(xyz_output_path)
 
-def detect_elements(pcd: o3d.geometry.PointCloud, wall_params: Dict, slab_params: Dict, opening_params: Dict) -> List[Dict]:
-    """
-    Detect all building elements in the point cloud.
-    """
-    elements = []
-    
-    # Detect walls first
-    walls = detect_walls(pcd, wall_params)
-    elements.extend(walls)
-    
-    # Detect slabs
-    slabs = detect_slabs(pcd, slab_params)
-    elements.extend(slabs)
-    
-    # Detect openings in walls
-    openings = detect_openings(pcd, walls, opening_params)
-    elements.extend(openings)
-    
-    return elements
+        # Process XYZ files (either originally provided or converted from E57)
+        # Or if a single PTX/XYZ file was provided directly by the user via upload
+        files_to_process = []
+        if self.ptx_filepath and os.path.exists(self.ptx_filepath):
+             files_to_process.append(self.ptx_filepath)
+        elif self.xyz_filenames:
+            files_to_process.extend(self.xyz_filenames)
+
+        if not files_to_process:
+            self._log("No point cloud files found to process.")
+            raise ValueError("No point cloud data available for processing.")
+
+        temp_points_xyz_list = []
+        # temp_points_rgb_list = [] # Uncomment if RGB is handled
+
+        for xyz_file_path in files_to_process:
+            if not os.path.exists(xyz_file_path):
+                self._log(f"Warning: XYZ file {xyz_file_path} not found. Skipping.")
+                continue
+            self._log(f'Extracting data from {xyz_file_path}...')
+            # Assuming load_xyz_file is adapted or available
+            points_xyz_temp, points_rgb_temp = load_xyz_file(
+                xyz_file_path, 
+                plot_xyz=False, # Should not plot in backend
+                select_ith_lines=self.dilute_pointcloud,
+                ith_lines=self.dilution_factor
+            )
+            temp_points_xyz_list.append(np.array(points_xyz_temp))
+            # temp_points_rgb_list.append(np.array(points_rgb_temp)) # Uncomment if RGB
+
+        if not temp_points_xyz_list:
+            self._log("No points loaded from any file.")
+            raise ValueError("Failed to load any points from the provided files.")
+
+        self.points_xyz = np.vstack(temp_points_xyz_list)
+        # self.points_rgb = np.vstack(temp_points_rgb_list) # Uncomment if RGB
+        self.points_xyz = np.round(self.points_xyz, 3)
+        self._log('All point cloud data imported and merged.')
+        self._log(f"Total points loaded: {len(self.points_xyz)}")
+
+    def _identify_slabs(self):
+        """Identifies slabs from the point cloud."""
+        from .point_cloud import identify_slabs # Assuming this function exists and is adapted
+        self._log("Starting slab segmentation...")
+        # Ensure points_rgb is passed if your identify_slabs function expects it,
+        # otherwise, you might need to pass None or an empty array of the correct shape.
+        # If points_rgb is not consistently populated, handle it:
+        current_points_rgb = self.points_rgb if self.points_rgb.size > 0 else None
+
+        slabs, horizontal_surface_planes = identify_slabs(
+            self.points_xyz, 
+            current_points_rgb, # Pass potentially None or empty RGB data
+            self.bfs_thickness,
+            self.tfs_thickness, 
+            z_step=0.15, # Consider making this configurable
+            pc_resolution=self.pc_resolution,
+            plot_segmented_plane=False # Ensure plotting is off
+        )
+        self.slabs = slabs
+        # self.horizontal_surface_planes = horizontal_surface_planes # Store if needed later
+        self._log(f"Slab segmentation completed. Found {len(self.slabs)} slabs.")
+        if not self.slabs:
+            self._log("Warning: No slabs were identified. Subsequent steps might fail or produce empty results.")
+            # Decide if this is a critical error that should stop processing
+            # raise ValueError("No slabs identified, cannot proceed.")
+
+
+    def _identify_walls_and_openings(self):
+        """Identifies walls and openings for each storey."""
+        from .point_cloud import split_pointcloud_to_storeys, identify_walls, identify_openings
+        self._log("Starting wall and opening segmentation...")
+        if not self.slabs:
+            self._log("Skipping wall and opening segmentation as no slabs were found.")
+            return
+
+        point_cloud_storeys = split_pointcloud_to_storeys(self.points_xyz, self.slabs)
+        
+        wall_id_counter = 0
+        processed_walls = []
+        processed_openings = []
+
+        for i, storey_pointcloud in enumerate(point_cloud_storeys):
+            self._log(f"Processing storey {i+1} for walls and openings.")
+            if storey_pointcloud is None or len(storey_pointcloud) == 0:
+                self._log(f"Storey {i+1} has no points. Skipping.")
+                continue
+
+            # Determine z_placement and wall_height based on slab information
+            # This logic is copied from the original script and might need refinement
+            # based on how slabs are structured and indexed.
+            # Ensure slabs list has enough elements for i and i+1 access.
+            if i + 1 >= len(self.slabs): # Check if there's a slab above the current one
+                 self._log(f"Warning: Not enough slab data to determine wall height for storey {i+1} based on slab {i+1}. Using estimated height or skipping.")
+                 # Potentially estimate height or skip this storey for wall detection
+                 # For now, let's assume a default or skip if critical info is missing
+                 if i == len(point_cloud_storeys) -1: # Topmost storey
+                     if self.exterior_scan:
+                         z_placement = self.slabs[i]['slab_bottom_z_coord'] + self.slabs[i]['thickness']
+                         # Estimate height for the topmost storey if no slab above
+                         # This is a placeholder, actual logic might be more complex
+                         wall_height = self.config.get("default_top_storey_height", 3.0) 
+                     else:
+                         z_placement = self.slabs[i]['slab_bottom_z_coord']
+                         wall_height = self.slabs[i]['thickness'] + self.tfs_thickness # Approximation
+                 else: # Should not happen if i+1 >= len(self.slabs)
+                     continue
+            else: # Normal case with slabs below and above (or top defined by last slab)
+                if self.exterior_scan:
+                    z_placement = self.slabs[i]['slab_bottom_z_coord'] + self.slabs[i]['thickness']
+                    wall_height = self.slabs[i + 1]['slab_bottom_z_coord'] - z_placement
+                else:
+                    if i == 0: # First storey
+                        z_placement = self.slabs[i]['slab_bottom_z_coord']
+                        if i == len(point_cloud_storeys) - 1: # Single storey building
+                            wall_height = self.slabs[i+1]['slab_bottom_z_coord'] - z_placement + self.tfs_thickness if (i+1 < len(self.slabs)) else self.slabs[i]['thickness'] + self.tfs_thickness
+                        else: # Multi-storey, first floor
+                            wall_height = self.slabs[i + 1]['slab_bottom_z_coord'] - z_placement
+                    elif i == len(point_cloud_storeys) - 1: # Last storey (but not single storey)
+                        z_placement = self.slabs[i]['slab_bottom_z_coord'] + self.slabs[i]['thickness']
+                        wall_height = self.slabs[i + 1]['slab_bottom_z_coord'] - z_placement + self.tfs_thickness if (i+1 < len(self.slabs)) else self.slabs[i]['thickness'] + self.tfs_thickness # Approx if no slab above
+                    else: # Intermediate storeys
+                        z_placement = self.slabs[i]['slab_bottom_z_coord'] + slabs[i]['thickness']
+                        wall_height = self.slabs[i + 1]['slab_bottom_z_coord'] - z_placement + self.slabs[i+1]['thickness']
+
+
+            top_z_placement = self.slabs[i + 1]['slab_bottom_z_coord'] if i + 1 < len(self.slabs) else z_placement + wall_height
+
+            # Ensure slab polygon is available for identify_walls
+            current_slab_polygon = self.slabs[i+1]['polygon'] if i+1 < len(self.slabs) and 'polygon' in self.slabs[i+1] else None
+            if current_slab_polygon is None:
+                self._log(f"Warning: Slab polygon for storey {i+1} (slab index {i+1}) not found. Wall detection might be affected.")
+                # Potentially skip or use a bounding box of the point cloud as a fallback
+                # For now, passing None, assuming identify_walls can handle it or it's not critical for all cases
+
+            (start_points, end_points, wall_thicknesses, wall_materials,
+             translated_filtered_rotated_wall_groups, wall_labels) = identify_walls(
+                storey_pointcloud, self.pc_resolution, self.min_wall_length,
+                self.min_wall_thickness, self.max_wall_thickness,
+                z_placement, top_z_placement, self.grid_coefficient,
+                current_slab_polygon, # Pass the polygon of the slab *above* the walls being detected
+                self.exterior_scan,
+                exterior_walls_thickness=self.exterior_walls_thickness
+            )
+            self._log(f"Storey {i+1}: Identified {len(start_points)} wall segments.")
+
+            for j in range(len(start_points)):
+                wall_id_counter += 1
+                wall_data = {
+                    'wall_id': wall_id_counter, 
+                    'storey': i + 1, 
+                    'start_point': start_points[j], 
+                    'end_point': end_points[j],
+                    'thickness': wall_thicknesses[j], 
+                    'material': wall_materials[j], 
+                    'z_placement': z_placement,
+                    'height': wall_height, 
+                    'label': wall_labels[j]
+                }
+                processed_walls.append(wall_data)
+
+                (opening_widths, opening_heights, opening_types) = identify_openings(
+                    j + 1, # Wall index within the storey
+                    translated_filtered_rotated_wall_groups[j],
+                    wall_labels[j], self.pc_resolution, self.grid_coefficient,
+                    min_opening_width=self.config.get("min_opening_width", 0.4),
+                    min_opening_height=self.config.get("min_opening_height", 0.6),
+                    max_opening_aspect_ratio=self.config.get("max_opening_aspect_ratio", 4),
+                    door_z_max=self.config.get("door_z_max", 0.1),
+                    door_min_height=self.config.get("door_min_height", 1.6),
+                    opening_min_z_top=self.config.get("opening_min_z_top", 1.6),
+                    plot_histograms_for_openings=False # Ensure plotting is off
+                )
+
+                for (x_start, x_end), (z_min, z_max), opening_type in zip(opening_widths, opening_heights, opening_types):
+                    opening_info = {
+                        "opening_wall_id": wall_id_counter, # Link to the global wall ID
+                        "opening_type": opening_type,
+                        "x_range_start": x_start,
+                        "x_range_end": x_end,
+                        "z_range_min": z_min,
+                        "z_range_max": z_max
+                    }
+                    processed_openings.append(opening_info)
+                self._log(f"Storey {i+1}, Wall {j+1} (Global ID {wall_id_counter}): Found {len(opening_widths)} openings.")
+        
+        self.walls = processed_walls
+        self.all_openings = processed_openings
+        self._log("Wall and opening segmentation completed for all storeys.")
+
+    def _identify_zones(self):
+        """Identifies zones (spaces) within each storey based on walls."""
+        # from .space_generator import identify_zones # Already imported at class level
+        self._log("Starting zone segmentation...")
+        if not self.walls:
+            self._log("Skipping zone segmentation as no walls were identified.")
+            return
+
+        # Group walls by storey for zone identification
+        walls_by_storey = {}
+        for wall in self.walls:
+            storey_num = wall['storey']
+            if storey_num not in walls_by_storey:
+                walls_by_storey[storey_num] = []
+            walls_by_storey[storey_num].append(wall)
+
+        processed_zones = [] # This will be a list of dictionaries, one per storey
+        for storey_num in sorted(walls_by_storey.keys()):
+            storey_walls = walls_by_storey[storey_num]
+            self._log(f"Identifying zones for storey {storey_num} with {len(storey_walls)} walls.")
+            # The original script appends results from identify_zones directly.
+            # identify_zones likely returns a dictionary of zones for *that* storey.
+            zones_in_storey = identify_zones(
+                storey_walls, 
+                snapping_distance=self.config.get("zone_snapping_distance", 0.8),
+                plot_zones=False # Ensure plotting is off
+            )
+            if zones_in_storey:
+                # Store zones with their storey index.
+                # The original `zones.append(zones_in_storey)` created a list of these dicts.
+                # We need to ensure the structure matches what IFC generation expects.
+                # If IFC part expects zones[idx] to be the zones for storey idx+1,
+                # we need to pad `processed_zones` if some storeys have no zones.
+                # For now, let's assume a direct list is fine, and IFC part handles indexing.
+                 processed_zones.append(zones_in_storey) # Appends the dict for the current storey
+            else:
+                processed_zones.append({}) # Append an empty dict if no zones found for this storey
+            self._log(f"Storey {storey_num}: Identified {len(zones_in_storey)} zones.")
+        
+        self.zones = processed_zones # self.zones is now a list of dicts, matching original structure
+        self._log("Zone segmentation completed.")
+
+
+    def _generate_ifc_model(self):
+        """Generates the IFC model from the segmented entities."""
+        self._log("Starting IFC model generation...")
+        if not self.slabs and not self.walls:
+            self._log("Skipping IFC generation as no slabs or walls were identified.")
+            return
+
+        self.ifc_model = IFCmodel(self.ifc_project_name, self.ifc_output_file)
+        self.ifc_model.define_author_information(
+            f"{self.ifc_author_name} {self.ifc_author_surname}", 
+            self.ifc_author_organization
+        )
+        self.ifc_model.define_project_data(
+            self.ifc_building_name, self.ifc_building_type, self.ifc_building_phase,
+            self.ifc_project_long_name, self.ifc_project_version, self.ifc_author_organization,
+            self.ifc_author_name, self.ifc_author_surname, self.ifc_site_latitude,
+            self.ifc_site_longitude, self.ifc_site_elevation
+        )
+
+        storeys_ifc = []
+        # Add Slabs and Storeys
+        for idx, slab_data in enumerate(self.slabs):
+            slab_position = slab_data['slab_bottom_z_coord'] + slab_data['thickness']
+            ifc_storey = self.ifc_model.create_building_storey(f'Floor {slab_position:.2f}m', slab_position)
+            storeys_ifc.append(ifc_storey)
+
+            points = [[float(x), float(y)] for x, y in zip(slab_data['polygon_x_coords'], slab_data['polygon_y_coords'])]
+            points_no_duplicates = [list(pt) for pt in dict.fromkeys(tuple(p) for p in points)]
+
+            slab_entity = self.ifc_model.create_slab(
+                slab_name=f'Slab {idx + 1}',
+                points=points_no_duplicates,
+                slab_z_position=round(slab_data['slab_bottom_z_coord'], 3),
+                slab_height=round(slab_data['thickness'], 3),
+                material_name=self.material_for_objects
+            )
+            self.ifc_model.assign_product_to_storey(slab_entity, ifc_storey)
+
+            # Add Zones (Spaces)
+            # self.zones is a list of dictionaries, where each dictionary contains zones for a storey.
+            # The index idx corresponds to the current slab/storey.
+            if idx < len(self.zones) and self.zones[idx]: # Check if zones exist for this storey
+                ifc_space_placement = self.ifc_model.space_placement(slab_position)
+                # Original code: if idx != len(slabs) - 1: # avoid creating zones on the uppermost slab
+                # This condition might need re-evaluation. If uppermost slab means roof, then yes.
+                # If it's the top floor slab, zones might still be relevant.
+                # For now, keeping similar logic:
+                if idx < len(self.slabs) -1 : # Avoid creating spaces above the last "floor" slab, assuming last slab is roof.
+                                            # Or, if zones are defined for the top storey, this check might be too restrictive.
+                                            # Let's assume zones[idx] corresponds to storey created from slabs[idx]
+                    zone_number = 1
+                    for space_name, space_data in self.zones[idx].items():
+                        # Ensure space_data contains "height"
+                        space_height = space_data.get("height")
+                        if space_height is None:
+                            self._log(f"Warning: Space {space_name} in storey {idx+1} is missing 'height'. Skipping space creation.")
+                            continue
+                        
+                        self.ifc_model.create_space(
+                            space_data,
+                            ifc_space_placement,
+                            (idx + 1), # Storey number
+                            zone_number,
+                            ifc_storey, # Assign to current IFC storey
+                            space_height
+                        )
+                        zone_number += 1
+        self._log(f"Added {len(self.slabs)} slabs and associated storeys/zones to IFC.")
+
+        # Add Walls and Openings
+        window_id_counter = 1
+        door_id_counter = 1
+        for wall_data in self.walls:
+            start_point = tuple(float(num) for num in wall_data['start_point'])
+            end_point = tuple(float(num) for num in wall_data['end_point'])
+            if start_point == end_point:
+                self._log(f"Skipping wall {wall_data['wall_id']} due to identical start/end points.")
+                continue
+
+            wall_thickness = wall_data['thickness']
+            wall_material_name = wall_data['material'] # This should be a name for create_material_layer
+            wall_z_placement = wall_data['z_placement']
+            wall_height = wall_data['height']
+            wall_label = wall_data['label']
+            current_storey_index = wall_data['storey'] - 1 # 0-indexed for storeys_ifc list
+
+            if current_storey_index < 0 or current_storey_index >= len(storeys_ifc):
+                self._log(f"Warning: Invalid storey index {current_storey_index} for wall {wall_data['wall_id']}. Skipping wall.")
+                continue
+            
+            ifc_storey_for_wall = storeys_ifc[current_storey_index]
+
+            material_layer = self.ifc_model.create_material_layer(wall_thickness, wall_material_name)
+            material_layer_set = self.ifc_model.create_material_layer_set([material_layer])
+            material_layer_set_usage = self.ifc_model.create_material_layer_set_usage(material_layer_set, wall_thickness)
+            
+            wall_placement_ifc = self.ifc_model.wall_placement(wall_z_placement) # Renamed to avoid conflict
+            wall_axis_placement = self.ifc_model.wall_axis_placement(start_point, end_point)
+            wall_axis_representation = self.ifc_model.wall_axis_representation(wall_axis_placement)
+            wall_swept_solid_representation = self.ifc_model.wall_swept_solid_representation(
+                start_point, end_point, wall_height, wall_thickness
+            )
+            product_definition_shape = self.ifc_model.product_definition_shape(
+                wall_axis_representation, wall_swept_solid_representation
+            )
+            
+            ifc_wall = self.ifc_model.create_wall(wall_placement_ifc, product_definition_shape) # Renamed variable
+            self.ifc_model.assign_material(ifc_wall, material_layer_set_usage)
+            wall_type, _ = self.ifc_model.create_wall_type(ifc_wall, wall_thickness) # Unpack tuple if create_wall_type returns more
+            self.ifc_model.assign_material(wall_type, material_layer_set) # Assign to type
+            self.ifc_model.assign_product_to_storey(ifc_wall, ifc_storey_for_wall)
+            
+            wall_ext_int_parameter = self.ifc_model.create_property_single_value("IsExternal", wall_label == 'exterior')
+            self.ifc_model.create_property_set(ifc_wall, [wall_ext_int_parameter], 'Pset_WallCommon') # Properties should be a list
+
+            # Openings for this wall
+            wall_openings_data = [op for op in self.all_openings if op['opening_wall_id'] == wall_data['wall_id']]
+
+            # Create materials for openings (once per model is enough, but here for simplicity per wall)
+            window_material, _ = self.ifc_model.create_material_with_color(
+                'WindowMaterial', self.window_colour_rgb, transparency=0.7
+            )
+            door_material, _ = self.ifc_model.create_material_with_color(
+                'DoorMaterial', self.door_colour_rgb
+            )
+
+            for opening_data in wall_openings_data:
+                opening_type = opening_data['opening_type']
+                opening_id_str = ""
+                if opening_type == "window":
+                    opening_id_str = f"W{window_id_counter:02d}"
+                    window_id_counter += 1
+                elif opening_type == "door":
+                    opening_id_str = f"D{door_id_counter:02d}"
+                    door_id_counter += 1
+                else:
+                    self._log(f"Warning: Unknown opening type '{opening_type}' for wall {wall_data['wall_id']}. Skipping opening.")
+                    continue
+                
+                opening_width = opening_data['x_range_end'] - opening_data['x_range_start']
+                opening_height = opening_data['z_range_max'] - opening_data['z_range_min']
+                window_sill_height = opening_data['z_range_min'] # Name is a bit misleading, it's z_min of opening
+                offset_from_start = opening_data['x_range_start']
+
+                # Create IFC Opening Element
+                opening_closed_profile = self.ifc_model.opening_closed_profile_def(float(opening_width), wall_thickness) # Use wall_thickness
+                
+                # opening_placement needs the wall's IfcLocalPlacement (wall_placement_ifc)
+                # and the relative placement of the opening.
+                # The original script's opening_placement seems to create a new local placement.
+                # Let's assume it's relative to the wall's start or needs careful handling.
+                # The IFCmodel methods for opening_placement and opening_extrusion need to be robust.
+                
+                # This is complex: opening_placement[1] was used. This implies opening_placement returns a tuple.
+                # Let's assume opening_placement is correctly defined in IFCmodel to handle this.
+                # It likely needs the wall's placement as a reference.
+                opening_placement_tuple = self.ifc_model.opening_placement(start_point, wall_placement_ifc) # Pass wall's placement
+                ifc_opening_local_placement = opening_placement_tuple[1] # Assuming this is the IfcLocalPlacement for the opening
+
+                opening_extrusion = self.ifc_model.opening_extrusion(
+                    opening_closed_profile, float(opening_height), start_point, end_point,
+                    float(window_sill_height), float(offset_from_start)
+                )
+                opening_representation = self.ifc_model.opening_representation(opening_extrusion)
+                opening_product_definition = self.ifc_model.product_definition_shape_opening(opening_representation)
+                
+                ifc_opening_element = self.ifc_model.create_wall_opening(ifc_opening_local_placement, opening_product_definition)
+                self.ifc_model.create_rel_voids_element(ifc_wall, ifc_opening_element)
+
+                # Create Window or Door filling the opening
+                filling_element_thickness = 0.05 # Example thickness for window/door frame/panel
+                if opening_type == "window":
+                    window_closed_profile = self.ifc_model.opening_closed_profile_def(float(opening_width), filling_element_thickness)
+                    window_extrusion = self.ifc_model.opening_extrusion(
+                        window_closed_profile, float(opening_height), start_point, end_point,
+                        float(window_sill_height), float(offset_from_start)
+                    )
+                    window_representation = self.ifc_model.opening_representation(window_extrusion)
+                    window_product_definition = self.ifc_model.product_definition_shape_opening(window_representation)
+                    
+                    ifc_window = self.ifc_model.create_window(ifc_opening_local_placement, window_product_definition, opening_id_str)
+                    window_type_obj, _ = self.ifc_model.create_window_type() # Assuming it returns type and representation
+                    self.ifc_model.create_rel_defines_by_type(ifc_window, window_type_obj)
+                    self.ifc_model.create_rel_fills_element(ifc_opening_element, ifc_window)
+                    self.ifc_model.assign_product_to_storey(ifc_window, ifc_storey_for_wall)
+                    self.ifc_model.assign_material(ifc_window, window_material)
+                elif opening_type == "door":
+                    door_closed_profile = self.ifc_model.opening_closed_profile_def(float(opening_width), filling_element_thickness)
+                    door_extrusion = self.ifc_model.opening_extrusion(
+                        door_closed_profile, float(opening_height), start_point, end_point,
+                        float(window_sill_height), float(offset_from_start) # Doors usually start from z=0 relative to floor
+                    )
+                    door_representation = self.ifc_model.opening_representation(door_extrusion)
+                    door_product_definition = self.ifc_model.product_definition_shape_opening(door_representation)
+                    
+                    ifc_door = self.ifc_model.create_door(ifc_opening_local_placement, door_product_definition, opening_id_str)
+                    # door_type_obj, _ = self.ifc_model.create_door_type() # If you have door types
+                    # self.ifc_model.create_rel_defines_by_type(ifc_door, door_type_obj)
+                    self.ifc_model.create_rel_fills_element(ifc_opening_element, ifc_door)
+                    self.ifc_model.assign_product_to_storey(ifc_door, ifc_storey_for_wall)
+                    self.ifc_model.assign_material(ifc_door, door_material)
+        self._log(f"Added {len(self.walls)} walls and {len(self.all_openings)} openings to IFC.")
+
+        # Write IFC File
+        self.ifc_model.write()
+        self._log(f'IFC model saved to {self.ifc_output_file}.')
+
+    def process(self):
+        """
+        Executes the full point cloud to IFC conversion process.
+        """
+        try:
+            self._log(f"Processing started.")
+
+            # 1. Load and prepare point cloud
+            self._log("Loading and preparing point cloud...")
+            self._load_and_prepare_point_cloud()
+            if self.points_xyz.size == 0:
+                self._log("Point cloud is empty after loading. Aborting.", level="error")
+                # Update job status in the main jobs dictionary if accessible
+                # Or raise an exception to be caught by job_processor.py
+                raise ValueError("Point cloud is empty after loading.")
+            self._log(f"Point cloud loaded with {self.points_xyz.shape[0]} points.")
+
+            # 2. Identify slabs
+            self._log("Identifying slabs...")
+            self._identify_slabs()
+            self._log(f"{len(self.slabs)} slabs identified.")
+
+            # 3. Identify walls and openings
+            self._log("Identifying walls and openings...")
+            self._identify_walls_and_openings()
+            self._log(f"{len(self.walls)} walls and {len(self.all_openings)} openings identified.")
+
+            # 4. Identify zones (if applicable)
+            # self._log("Identifying zones...")
+            # self._identify_zones()
+            # self._log(f"{len(self.zones)} zones identified.")
+
+            # 5. Generate IFC model
+            self._log("Generating IFC model...")
+            self._generate_ifc_model()
+            self._log(f"IFC model generated at {self.ifc_model_path}")
+
+            self._log("Processing completed successfully.")
+
+        except Exception as e:
+            self._log(f"Error during processing: {str(e)}", level="error")
+            logger.exception(f"Job {self.job_id}: Full traceback for error during processing") # Log full traceback
+            # Propagate the error so job_processor.py can mark the job as failed
+            raise
+
+# === Remove the old script execution logic below this line ===
+# All the code that was previously global (reading files, calling functions)
+# should now be part of the CloudToBimProcessor class methods or
+# handled by the job_processor.py which will instantiate and run this class.
+
+# Example of how job_processor.py might use this:
+# from .cloud2entities import CloudToBimProcessor
+#
+# def process_conversion_job(job_id: str, config_data: dict, input_dir: str, output_dir: str):
+#     processor = CloudToBimProcessor(job_id, config_data, input_dir, output_dir)
+#     success, result_or_error = processor.process()
+#     if success:
+#         # Update job status to completed, store result_or_error (IFC path)
+#         pass
+#     else:
+#         # Update job status to failed, store result_or_error (error message)
+#         pass

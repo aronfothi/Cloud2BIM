@@ -17,9 +17,9 @@ This document defines the criteria for completing each component of the project.
 ## 🧠 2. Copilot Integration
 
 - [x] `.github/copilot-instructions.md` exists and:
-  - Explains the project context clearly.
-  - Includes rules for coding standards, tech stack, naming, async patterns.
-  - Provides expected behavior for endpoint generation and background task logic.
+  - [x] Explains the project context clearly.
+  - [x] Includes rules for coding standards, tech stack, naming, async patterns.
+  - [x] Provides expected behavior for endpoint generation and background task logic.
 
 ---
 
@@ -58,23 +58,27 @@ This document defines the criteria for completing each component of the project.
 ## 🧰 4. Background Processing Logic
 
 - [x] YAML config is parsed and validated.
-- [ ] PTX or XYZ file is read and converted into internal point cloud format.
-- [ ] Cloud2BIM logic is invoked to:
-  - [ ] Detect slabs, walls, openings, and zones.
-  - [ ] Generate IFC file using IfcOpenShell.
+- [x] PTX or XYZ file is read and converted into internal point cloud format (using Open3D).
+- [x] Refactored `app/core/cloud2entities.py` into a class-based `CloudToBimProcessor`.
+- [ ] `CloudToBimProcessor` class methods are invoked to:
+  - [x] Detect slabs, walls, openings (initial implementation done, needs refinement and full integration within the class).
+  - [ ] Detect zones (method within `CloudToBimProcessor`).
+  - [ ] Generate IFC file using IfcOpenShell (method within `CloudToBimProcessor`, needs actual entity creation).
 - [x] After each step:
   - [x] Progress percentage and current stage are updated.
 - [x] Outputs are saved in `jobs/<job_id>/output/`:
-  - [x] `model.ifc`
-  - [x] `point_mapping.json`
+  - [x] `model.ifc` (placeholder, needs actual generation)
+  - [x] `point_mapping.json` (placeholder, needs actual generation)
 - [x] Job tracker updated to `completed` on success, `failed` on exception.
 
 ---
 
 ## 🖥️ 5. CLI Client
 
-- [x] Accepts CLI arguments for point cloud file, config file, and server URL.
-- [x] Uploads files via `POST /convert`.
+- [ ] Accepts CLI arguments for one or more point cloud files (PLY, PTX, XYZ), a config file, and server URL.
+- [ ] Merges multiple point cloud files into a single Open3D PointCloud object.
+- [ ] Converts the merged point cloud to a standard format (e.g., PLY) before upload.
+- [ ] Uploads the merged point cloud file and config file via `POST /convert`.
 - [x] Polls `GET /status/{job_id}` until job is complete.
 - [x] Prints progress percentage and stage name to stdout.
 - [x] Downloads IFC and mapping files on completion.
@@ -84,36 +88,86 @@ This document defines the criteria for completing each component of the project.
 
 ## 🧪 6. Testing & Validation
 
-- [x] Unit tests or manual test scripts for each endpoint.
-- [ ] IFC output opened and verified in at least one BIM viewer.
+### ✅ 6.1 Basic Unit Tests
+- [x] Unit tests or manual test scripts for each endpoint (basic structure created, needs expansion).
+- [ ] Sample project (input + config + output) added for demonstration (`tests/data/`).
+
+### 🆕 6.2 CloudToBimProcessor Tests
+- [ ] Create comprehensive test suite for `CloudToBimProcessor` class:
+  - [ ] Test initialization with various config options
+  - [ ] Test point cloud loading for different formats (PLY, PTX, XYZ)
+  - [ ] Test slab detection
+  - [ ] Test wall and opening detection
+  - [ ] Test zone identification
+  - [ ] Test IFC model generation
+  - [ ] Test error handling and edge cases
+  - [ ] Test progress tracking and logging
+  - [ ] Test point mapping file generation
+- [ ] Add test fixtures for sample point clouds and configs
+- [ ] Set up mock objects for external dependencies
+- [ ] Test with corrupted/invalid input files
+
+### 🆕 6.3 Point Cloud Merging Tests
+- [ ] Create test suite for point cloud merging functionality:
+  - [ ] Test merging multiple PLY files
+  - [ ] Test merging multiple PTX files
+  - [ ] Test merging mixed format files (PLY + PTX + XYZ)
+  - [ ] Test handling of color data during merging
+  - [ ] Test coordinate system alignment
+  - [ ] Test error handling for invalid files
+  - [ ] Test memory usage with large point clouds
+
+### ✅ 6.4 Integration Tests
+- [ ] IFC output opened and verified in at least one BIM viewer (e.g., BlenderBIM).
 - [ ] Mapping file manually checked against known point cloud.
-- [x] Sample project (input + config + output) added for demonstration.
+- [ ] Test end-to-end workflow with merged point clouds
+- [ ] Performance testing with large datasets
+
+### 🆕 6.5 Client Tests
+- [ ] Test client-side file format detection
+- [ ] Test point cloud merging error handling
+- [ ] Test progress reporting
+- [ ] Test connection error handling
+- [ ] Test large file upload handling
 
 ---
 
 ## 🧹 7. Quality and Maintenance
 
-- [ ] All Python code follows PEP8 with consistent formatting.
+- [ ] All Python code follows PEP8 with consistent formatting (run `black .` and `flake8 .`).
 - [ ] Type hints are present for all functions and parameters.
 - [ ] All public functions have docstrings.
 - [ ] Logging is implemented using `logging` module, not `print()`.
 - [ ] Dead code and debugging statements removed.
-- [ ] Repository includes:
-  - `README.md` with installation, usage, API docs.
-  - `TODO.md` for development tracking.
-  - `copilot-instructions.md` for AI pair programming.
-  - Example input files in `/data/` or `/samples/`.
+- [x] Update `README.md` with current project status and instructions.
+- [ ] Create `developer-guide.md`.
 
 ---
 
-## 🚀 8. Ready for Deployment
+## 🚀 8. Deployment Readiness
 
-- [ ] Project runs locally with `uvicorn app.main:app --reload`.
-- [ ] `requirements.txt` supports installation on new machines.
-- [ ] Outputs are verified for at least 2 different point cloud samples.
-- [ ] Optional: Dockerfile added for reproducible builds.
+- [ ] Resolve any outstanding dependency issues.
+- [ ] Verify application runs correctly with at least two different point cloud samples producing valid IFC models.
+- [ ] Consider Dockerization for easier deployment.
 
 ---
 
-**NOTE:** Every checkbox must be checked and validated by code review or integration testing before the project is considered complete.
+## 🐛 Known Issues / TODOs from Implementation
+
+- `app/core/job_processor.py`: 
+    - Ensure `config_params` are correctly passed and used by detection/generation functions.
+    - Implement robust error handling for each processing stage.
+- `app/core/cloud2entities.py`:
+    - Refine `detect_walls`, `detect_slabs`, `detect_openings` for accuracy and robustness.
+    - Implement `detect_zones`.
+    - Ensure point indices are correctly managed and returned for `point_mapping.json`.
+- `app/core/generate_ifc.py`:
+    - Replace placeholder IFC generation with actual IfcOpenShell logic to create entities based on detected elements.
+    - Implement mapping of detected elements to IFC entities.
+    - Store point indices per IFC element for `point_mapping.json`.
+- `app/main.py` / `app/api/endpoints.py`:
+    - Review error handling and HTTP status codes for all endpoints.
+- General:
+    - Ensure thread-safety if any shared mutable state is introduced (currently `jobs` dict in `endpoints.py` is accessed by background tasks).
+    - Add more detailed logging throughout the application.
 

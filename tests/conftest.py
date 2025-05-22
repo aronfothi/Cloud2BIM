@@ -2,9 +2,15 @@
 This module contains pytest fixtures that can be reused across multiple test files.
 """
 import os
+import sys  # Add this import
+from pathlib import Path  # Add this import to use Path for path manipulation
+
+# Add the project root to sys.path
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root))
+
 import pytest
 from fastapi.testclient import TestClient
-from pathlib import Path
 
 from app.main import app
 
