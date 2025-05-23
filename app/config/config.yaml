@@ -1,13 +1,11 @@
-e57_input: false
-e57_files:
-  - input_e57/werk_satny_vstup.e57
-xyz_files:
-  - input_xyz/new_data/ISPR_UO2_1st.xyz
+exterior_scan: false
 dilute: false
 dilution_factor: 10
-exterior_scan: false
-pc_resolution: 0.002
-grid_coefficient: 5
+preprocessing:
+  voxel_size: 0.002
+  noise_threshold: 0.02
+detection:
+  grid_coefficient: 5
 
 bfs_thickness: 0.3
 tfs_thickness: 0.4
@@ -17,10 +15,10 @@ min_wall_thickness: 0.05
 max_wall_thickness: 0.75
 exterior_walls_thickness: 0.3
 
-output_ifc: output_IFC/output-2.ifc
-ifc_project_name: Sample project
-ifc_project_long_name: Deconstruction of non-load-bearing elements
-ifc_project_version: version 1.0
+ifc:
+  project_name: Sample project
+  project_long_name: Deconstruction of non-load-bearing elements
+  version: version 1.0
 
 ifc_author_name: Slavek
 ifc_author_surname: Zbirovsky

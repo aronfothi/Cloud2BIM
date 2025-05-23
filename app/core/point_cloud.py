@@ -235,3 +235,92 @@ class PointCloudProcessor:
             else:
                 colors.append([0, 1, 3*hue-2])
         return np.array(colors)
+
+def read_point_cloud(file_path: str, subsample: int = 1) -> Optional[o3d.geometry.PointCloud]:
+    """
+    Read a point cloud from file in various formats (PTX, XYZ, PLY).
+    
+    Args:
+        file_path: Path to point cloud file
+        subsample: Subsampling factor (only applies to PTX files)
+        
+    Returns:
+        PointCloud object or None if loading fails
+    """
+    try:
+        file_ext = file_path.lower().split('.')[-1]
+        
+        if file_ext == 'ptx':
+            points, colors = read_ptx_file(file_path, subsample)
+            if points is None:
+                return None
+                
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(points)
+            if colors is not None:
+                pcd.colors = o3d.utility.Vector3dVector(colors)
+            return pcd
+            
+        elif file_ext in ['xyz', 'ply']:
+            try:
+                return o3d.io.read_point_cloud(file_path)
+            except Exception as e:
+                logger.error(f"Failed to read {file_ext} file: {e}")
+                return None
+                
+        else:
+            logger.error(f"Unsupported file format: {file_ext}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error reading point cloud file {file_path}: {e}")
+        return None
+
+def read_ptx_file(file_path: str, subsample: int = 1) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """
+    Read points and colors from a PTX file.
+    
+    Args:
+        file_path: Path to PTX file
+        subsample: Take every nth point
+        
+    Returns:
+        Tuple of (points, colors) arrays, or (None, None) if reading fails
+    """
+    try:
+        # Read header
+        with open(file_path, 'r') as f:
+            # Read scanner and grid params (not used currently)
+            rows = int(f.readline().strip())
+            cols = int(f.readline().strip())
+            
+            # Skip transformation matrix
+            for _ in range(4):
+                f.readline()
+                
+            # Read points
+            points = []
+            colors = []
+            
+            line_count = 0
+            for line in f:
+                line_count += 1
+                if line_count % subsample != 0:
+                    continue
+                    
+                values = line.strip().split()
+                if len(values) >= 7:  # x,y,z,i,r,g,b
+                    x, y, z = map(float, values[0:3])
+                    r, g, b = map(float, values[4:7])
+                    points.append([x, y, z])
+                    # Normalize RGB values to [0,1]
+                    colors.append([r/255.0, g/255.0, b/255.0])
+                    
+            if not points:
+                return None, None
+                
+            return np.array(points), np.array(colors)
+            
+    except Exception as e:
+        logger.error(f"Error reading PTX file {file_path}: {e}")
+        return None, None

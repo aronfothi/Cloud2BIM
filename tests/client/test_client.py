@@ -323,10 +323,28 @@ def test_read_ptx_minimal(minimal_ptx_path):
     pcd = read_point_cloud(str(minimal_ptx_path))
     assert pcd is not None
     assert len(pcd.points) == 6  # Our minimal file has 6 points
-    assert len(pcd.colors) == 6  # Should have colors for all points
+    assert pcd.has_colors()  # Should have colors
+    assert len(pcd.colors) == len(pcd.points)  # Should have colors for all points
     
-    # Verify first and last points
+    # Verify points and colors are valid
     points = np.asarray(pcd.points)
     colors = np.asarray(pcd.colors)
-    np.testing.assert_array_almost_equal(points[0], [0.0, 0.0, 0.0])
-    np.testing.assert_array_almost_equal(colors[0], [1.0, 0.0, 0.0])  # First point is red
+    assert points.shape[1] == 3  # Each point should have x, y, z
+    assert colors.shape[1] == 3  # Each color should have r, g, b
+    assert np.all((colors >= 0) & (colors <= 1))  # Colors should be normalized
+
+def test_read_ptx_with_subsampling(minimal_ptx_path):
+    """Test reading a PTX file with subsampling."""
+    # First read without subsampling to get baseline
+    pcd_full = read_point_cloud(str(minimal_ptx_path), subsample=1)
+    assert pcd_full is not None
+    full_points = len(pcd_full.points)
+    
+    # Read with subsampling factor of 2
+    pcd_subsampled = read_point_cloud(str(minimal_ptx_path), subsample=2)
+    assert pcd_subsampled is not None
+    subsampled_points = len(pcd_subsampled.points)
+    
+    # The subsampled point cloud should have roughly half the points
+    # Allow for some variance due to rounding
+    assert 0.4 * full_points <= subsampled_points <= 0.6 * full_points

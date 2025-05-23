@@ -62,8 +62,10 @@ def load_config_and_variables(config_path: str | None = None):  # Added config_p
     #     "slab_detection", "wall_detection", "opening_detection"
     # ]
     # Updated required_keys based on tests/data/sample_config.yaml
+    # We now have a more flexible approach to configuration
+    # Minimal required sections
     required_keys = [
-        "preprocessing", "detection", "ifc"
+        "detection"  # Only require detection section as minimum
     ]
 
     missing_keys = [key for key in required_keys if key not in config]
@@ -72,6 +74,13 @@ def load_config_and_variables(config_path: str | None = None):  # Added config_p
             logger_aux.error(f"Missing required config key: '{key}' in '{effective_config_path}'.")
         logger_aux.error(f"Missing required keys in '{effective_config_path}'. Cannot proceed with this configuration.")
         return None # Indicate failure due to missing keys
+        
+    # Ensure minimum structure exists
+    if "preprocessing" not in config:
+        config["preprocessing"] = {"voxel_size": 0.05, "noise_threshold": 0.02}
+        
+    if "ifc" not in config:
+        config["ifc"] = {"project_name": "Cloud2BIM Project"}
 
     # The original function created a flat 'variables' dictionary.
     # For now, we return the raw 'config' dictionary as 'config_params'.

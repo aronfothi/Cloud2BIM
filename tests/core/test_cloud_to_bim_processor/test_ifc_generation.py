@@ -179,3 +179,92 @@ def test_point_mapping_creation(processor_setup):
     
     assert os.path.exists(mapping_path)
     # Add specific checks for mapping content based on your implementation
+
+@pytest.fixture
+def scan6_processor(tmp_path):
+    """Set up a CloudToBimProcessor with scan6.ptx test data."""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    
+    # Copy scan6.ptx to input directory
+    import shutil
+    shutil.copy(SAMPLE_PTX, input_dir / SAMPLE_PTX.name)
+    
+    config = {
+        "point_cloud_file_path": str(input_dir / SAMPLE_PTX.name),
+        "detection": {
+            "slab": {
+                "thickness": 0.3  # 30cm slab thickness
+            },
+            "wall": {
+                "min_width": 1.0,
+                "min_thickness": 0.1,
+                "max_thickness": 0.5,
+                "thickness": 0.2
+            }
+        },
+        "preprocessing": {
+            "voxel_size": 0.05  # 5cm voxel size for downsampling
+        },
+        "ifc": {
+            "project_name": "Scan6 Test Project",
+            "project_long_name": "Test Project from scan6.ptx",
+            "version": "1.0",
+            "author_name": "Test",
+            "author_surname": "User",
+            "organization": "Test Org"
+        }
+    }
+    
+    processor = CloudToBimProcessor(
+        job_id="test-scan6",
+        config_data=config,
+        input_dir=str(input_dir),
+        output_dir=str(output_dir)
+    )
+    
+    return processor, output_dir
+
+def test_scan6_ifc_generation(scan6_processor):
+    """Test that the IFC model contains exactly 2 slabs when processing scan6.ptx."""
+    processor, output_dir = scan6_processor
+    
+    # Process the point cloud
+    processor.process()
+    
+    # Check that IFC file was created
+    ifc_path = os.path.join(output_dir, "test-scan6_model.ifc")
+    assert os.path.exists(ifc_path), f"IFC file was not created at {ifc_path}"
+    
+    # Load and verify IFC file
+    ifc_file = ifcopenshell.open(ifc_path)
+    
+    # Check project structure
+    projects = ifc_file.by_type("IfcProject")
+    assert len(projects) == 1, "Expected exactly one IfcProject"
+    
+    # Check slabs
+    slabs = ifc_file.by_type("IfcSlab")
+    assert len(slabs) == 2, f"Expected exactly 2 slabs, found {len(slabs)}"
+    
+    # Verify slab properties
+    slab_heights = []
+    for slab in slabs:
+        # Check that slabs have geometry
+        assert slab.Representation is not None, f"Slab {slab.GlobalId} has no geometry"
+        
+        # Check that slabs are assigned to storeys
+        rel_contained = next((rel for rel in ifc_file.by_type("IfcRelContainedInSpatialStructure") 
+                            if slab in rel.RelatedElements), None)
+        assert rel_contained is not None, f"Slab {slab.GlobalId} is not assigned to a storey"
+        
+        # Get slab height from placement
+        if rel_contained and rel_contained.RelatingStructure:
+            storey = rel_contained.RelatingStructure
+            slab_heights.append(storey.Elevation)
+    
+    # Verify we have slabs at different heights (floor and ceiling)
+    assert len(slab_heights) == 2, "Expected heights for 2 slabs"
+    assert slab_heights[0] != slab_heights[1], "Slabs should be at different heights"

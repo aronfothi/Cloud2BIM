@@ -1,16 +1,19 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from starlette.responses import FileResponse
 from app.models.job import Job
+from app.models.point_cloud import PointCloudData
 from app.core.job_processor import process_conversion_job
 from app.core.storage import (
     get_job_input_dir,
     get_job_output_dir,
-    save_upload_file,
     jobs
 )
 import uuid
 import os
+import json
+import yaml
 import logging
+import open3d as o3d
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -18,71 +21,84 @@ router = APIRouter()
 @router.post("/convert", response_model=Job, status_code=202)
 async def create_conversion_job(
     background_tasks: BackgroundTasks,
-    point_cloud_file: UploadFile = File(..., description="Merged point cloud file (e.g., PLY, PTX, XYZ, PCD)"),
+    point_cloud_data: UploadFile = File(..., description="JSON file containing point cloud data"),
     config_file: UploadFile = File(..., description="YAML configuration file")
 ):
     """
-    Accepts a merged point cloud file (e.g., PLY) and a YAML configuration file,
-    stores them for the job, starts an asynchronous conversion job, 
-    and returns a job ID with status 202 (Accepted).
+    Accepts point cloud data as a JSON file (containing points and optional colors)
+    and a YAML configuration file, stores them for the job, starts an asynchronous
+    conversion job, and returns a job ID with status 202 (Accepted).
     """
     job_id = str(uuid.uuid4())
     
-    # Validate file types - more generic for point cloud, specific for config
-    # Client now sends a .ply file, but we can be a bit flexible or enforce .ply
-    supported_pc_extensions = (".ply", ".ptx", ".xyz", ".pcd") # Server can define what it accepts
-    if not (point_cloud_file.filename.lower().endswith(supported_pc_extensions)):
-        raise HTTPException(status_code=400, detail=f"Invalid point cloud file type. Must be one of {supported_pc_extensions}")
-    if not (config_file.filename.lower().endswith((".yaml", ".yml"))):
-        raise HTTPException(status_code=400, detail="Invalid configuration file type. Must be .yaml or .yml")
-
-    # Create job directories
-    job_input_dir = get_job_input_dir(job_id)
-    job_output_dir = get_job_output_dir(job_id)
-    os.makedirs(job_input_dir, exist_ok=True)
-    os.makedirs(job_output_dir, exist_ok=True)
-    
-    # Save files
-    # Use a consistent internal name for the point cloud file, e.g., input.ply or derive from job_id
-    # For simplicity, using the uploaded filename but prefixed with job_id for uniqueness in the job folder.
-    safe_pc_filename = f"{job_id}_{os.path.basename(point_cloud_file.filename)}"
-    pc_filepath = os.path.join(job_input_dir, safe_pc_filename)
-
     try:
-        save_upload_file(point_cloud_file, pc_filepath)
-        logger.info(f"Job {job_id}: Saved point cloud file to {pc_filepath}")
+        # Parse point cloud data
+        point_cloud_content = await point_cloud_data.read()
+        point_cloud_dict = json.loads(point_cloud_content.decode('utf-8'))
+        point_cloud = PointCloudData(**point_cloud_dict)
         
+        # Parse configuration
         config_content = await config_file.read()
-        config_content_str = config_content.decode('utf-8')
-        logger.info(f"Job {job_id}: Read configuration file {config_file.filename}")
+        config_data = yaml.safe_load(config_content.decode('utf-8'))
 
+        # Create job directories
+        job_input_dir = get_job_input_dir(job_id)
+        job_output_dir = get_job_output_dir(job_id)
+        os.makedirs(job_input_dir, exist_ok=True)
+        os.makedirs(job_output_dir, exist_ok=True)
+
+        # Convert point cloud data to Open3D format and save as PLY
+        points_array, colors_array = point_cloud.to_numpy()
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points_array)
+        if colors_array is not None:
+            pcd.colors = o3d.utility.Vector3dVector(colors_array)
+
+        # Save point cloud in PLY format for processing
+        pc_filepath = os.path.join(job_input_dir, f"{job_id}_input.ply")
+        o3d.io.write_point_cloud(pc_filepath, pcd)
+        logger.info(f"Job {job_id}: Saved point cloud data to {pc_filepath}")
+
+        # Save configuration
+        config_filepath = os.path.join(job_input_dir, f"{job_id}_config.yaml")
+        with open(config_filepath, 'w') as f:
+            yaml.dump(config_data, f)
+        logger.info(f"Job {job_id}: Saved configuration to {config_filepath}")
+
+        # Initialize job
+        jobs[job_id] = {
+            "status": "pending",
+            "stage": "Queued",
+            "progress": 0,
+            "message": "Job received and queued for processing.",
+            "point_cloud_file_path": pc_filepath,
+            "original_point_cloud_filename": point_cloud.filename,
+            "config_data": config_data
+        }
+
+        # Start processing
+        background_tasks.add_task(process_conversion_job, job_id)
+
+        return Job(
+            job_id=job_id, 
+            status=jobs[job_id]["status"], 
+            message=jobs[job_id]["message"],
+            stage=jobs[job_id]["stage"],
+            progress=jobs[job_id]["progress"]
+        )
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in point cloud data: {e}")
+        raise HTTPException(status_code=400, detail="Invalid point cloud data format")
+    except yaml.YAMLError as e:
+        logger.error(f"Invalid YAML in configuration: {e}")
+        raise HTTPException(status_code=400, detail="Invalid configuration format")
     except Exception as e:
-        logger.error(f"Error saving uploaded files for job {job_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Could not save uploaded files: {e}")
+        logger.error(f"Error processing job {job_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
-        await point_cloud_file.close()
+        await point_cloud_data.close()
         await config_file.close()
-
-    # Initialize job
-    jobs[job_id] = {
-        "status": "pending",
-        "stage": "Queued",
-        "progress": 0,
-        "message": "Job received and queued for processing.",
-        "point_cloud_file_path": pc_filepath, # Updated field name
-        "original_point_cloud_filename": os.path.basename(point_cloud_file.filename), # Updated field name
-        "config_content": config_content_str
-    }
-
-    background_tasks.add_task(process_conversion_job, job_id)
-
-    return Job(
-        job_id=job_id, 
-        status=jobs[job_id]["status"], 
-        message=jobs[job_id]["message"],
-        stage=jobs[job_id]["stage"],
-        progress=jobs[job_id]["progress"]
-    )
 
 @router.get("/status/{job_id}", response_model=Job)
 async def get_job_status(job_id: str):
