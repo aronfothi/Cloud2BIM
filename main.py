@@ -1,19 +1,27 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
-from starlette.responses import FileResponse # Added for serving files
+from starlette.responses import FileResponse
 from pydantic import BaseModel
 import uuid
 import shutil
 import os
 import asyncio
 import logging
-from typing import Dict, Any
-import yaml # For parsing YAML
+from typing import Dict, Any, List
+import yaml
+import pathlib
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Cloud2BIM Service")
+
+# Supported file formats
+SUPPORTED_FORMATS = ['.ptx', '.xyz', '.ply']  # Added .ply format
+
+def validate_file_format(filename: str) -> bool:
+    """Validates if the file has a supported extension."""
+    return pathlib.Path(filename).suffix.lower() in SUPPORTED_FORMATS
 
 # In-memory store for job statuses
 # For production, consider a more robust solution like Redis or a database
@@ -52,28 +60,31 @@ def save_upload_file(upload_file: UploadFile, destination: str) -> None:
     finally:
         upload_file.file.close()
 
-async def process_conversion_job(job_id: str, original_ptx_filename: str, config_content_str: str):
+def validate_file_extension(filename: str) -> bool:
+    """Validates if the file has a supported extension."""
+    return any(filename.lower().endswith(ext) for ext in SUPPORTED_FORMATS)
+
+async def process_conversion_job(job_id: str, original_point_cloud_filename: str, config_content_str: str):
     """
-    Processes the point cloud to IFC conversion.
+    Processes the point cloud to IFC conversion using the CloudToBimProcessor.
     """
+    from app.core.cloud2entities import CloudToBimProcessor
+    import open3d as o3d
+    
     job_input_dir = get_job_input_dir(job_id)
     job_output_dir = get_job_output_dir(job_id)
     
-    ptx_filepath = os.path.join(job_input_dir, f"{job_id}_{original_ptx_filename}")
+    point_cloud_filepath = os.path.join(job_input_dir, f"{job_id}_{original_point_cloud_filename}")
 
     jobs[job_id]["status"] = "processing"
     jobs[job_id]["stage"] = "Initializing"
-    jobs[job_id]["progress"] = 0 # Initial progress
-    logger.info(f"Job {job_id}: Started processing for {ptx_filepath}")
-
-    total_steps = 5 # Define total number of major steps for progress calculation
-    current_step = 0
+    jobs[job_id]["progress"] = 0
+    logger.info(f"Job {job_id}: Started processing for {point_cloud_filepath}")
 
     try:
         # Step 1: Parse YAML configuration
-        current_step += 1
         jobs[job_id]["stage"] = "Parsing configuration"
-        jobs[job_id]["progress"] = int((current_step / total_steps) * 100) - 10 # Simulate partial completion
+        jobs[job_id]["progress"] = 10
         logger.info(f"Job {job_id}: Parsing YAML configuration.")
         try:
             config_data = yaml.safe_load(config_content_str)
@@ -82,79 +93,70 @@ async def process_conversion_job(job_id: str, original_ptx_filename: str, config
             logger.error(f"Job {job_id}: Error parsing YAML configuration: {e}")
             raise ValueError(f"Invalid YAML configuration: {e}")
 
-        await asyncio.sleep(1) # Simulate work
-        jobs[job_id]["progress"] = int((current_step / total_steps) * 100)
-
         # Step 2: Load point cloud
-        current_step += 1
         jobs[job_id]["stage"] = "Loading point cloud"
-        jobs[job_id]["progress"] = int((current_step / total_steps) * 100) - 10 
-        logger.info(f"Job {job_id}: Loading point cloud from {ptx_filepath} (simulated).")
-        # Placeholder: actual_ptx_data = open3d.io.read_point_cloud(ptx_filepath)
-        await asyncio.sleep(2) # Simulate loading
-        jobs[job_id]["progress"] = int((current_step / total_steps) * 100)
+        jobs[job_id]["progress"] = 20
+        logger.info(f"Job {job_id}: Loading point cloud from {point_cloud_filepath}.")
+        
+        # Load point cloud using Open3D
+        point_cloud_data = o3d.io.read_point_cloud(point_cloud_filepath)
+        if len(point_cloud_data.points) == 0:
+            raise ValueError("Point cloud file is empty or could not be read")
+        
+        logger.info(f"Job {job_id}: Point cloud loaded with {len(point_cloud_data.points)} points.")
 
-        # Step 3: Run Cloud2BIM segmentation 
-        # This can be broken down further for more granular progress
-        current_step += 1
-        jobs[job_id]["stage"] = "Segmenting point cloud (slabs)"
-        jobs[job_id]["progress"] = int((current_step / total_steps) * 100) - 15
-        logger.info(f"Job {job_id}: Running slab detection (simulated).")
-        await asyncio.sleep(2) 
-        # Placeholder: slabs = detect_slabs(actual_ptx_data, config_data.get(\'slab_params\'))
+        # Step 3: Initialize and run CloudToBimProcessor
+        jobs[job_id]["stage"] = "Processing point cloud"
+        jobs[job_id]["progress"] = 30
         
-        jobs[job_id]["stage"] = "Segmenting point cloud (walls)"
-        jobs[job_id]["progress"] = int((current_step / total_steps) * 100) - 5
-        logger.info(f"Job {job_id}: Running wall detection (simulated).")
-        await asyncio.sleep(2)
-        # Placeholder: walls = detect_walls(actual_ptx_data, config_data.get(\'wall_params\'))
-        jobs[job_id]["progress"] = int((current_step / total_steps) * 100)
+        # Create processor instance
+        processor = CloudToBimProcessor(
+            job_id=job_id,
+            config_data=config_data,
+            output_dir=job_output_dir,
+            point_cloud_data=point_cloud_data
+        )
         
-        # ... (other segmentation steps: openings, zones - each could increment progress)
-
-        # Step 4: Generate IFC model
-        current_step += 1
-        jobs[job_id]["stage"] = "Generating IFC model"
-        jobs[job_id]["progress"] = int((current_step / total_steps) * 100) - 10
-        logger.info(f"Job {job_id}: Generating IFC model (simulated).")
-        # Placeholder: ifc_file_content = generate_ifc_model(slabs, walls, ...)
-        await asyncio.sleep(3)
-        jobs[job_id]["progress"] = int((current_step / total_steps) * 100)
-
-        # Step 5: Save IFC file and point_mapping.json
-        current_step += 1
-        jobs[job_id]["stage"] = "Saving results"
-        jobs[job_id]["progress"] = int((current_step / total_steps) * 100) - 10
+        # Update progress during processing
+        def update_progress(stage: str, progress: int):
+            jobs[job_id]["stage"] = stage
+            jobs[job_id]["progress"] = progress
+            logger.info(f"Job {job_id}: {stage} - {progress}%")
         
-        result_filename_ifc = "model.ifc"
-        result_filepath_ifc = os.path.join(job_output_dir, result_filename_ifc)
-        logger.info(f"Job {job_id}: Saving IFC model to {result_filepath_ifc} (simulated).")
-        with open(result_filepath_ifc, "w") as f:
-            f.write(f"IFC-CONTENT-PLACEHOLDER-FOR-JOB-{job_id}")
+        # Run the actual processing using the process() method
+        update_progress("Processing point cloud", 40)
+        processor.process()  # This handles all the steps internally
         
-        # Generate and save dummy point_mapping.json
-        result_filename_mapping = "point_mapping.json"
-        result_filepath_mapping = os.path.join(job_output_dir, result_filename_mapping)
-        logger.info(f"Job {job_id}: Saving point mapping to {result_filepath_mapping} (simulated).")
-        with open(result_filepath_mapping, "w") as f:
-            import json
-            # Placeholder for actual mapping data
-            dummy_mapping_data = {
-                "jobId": job_id,
-                "ifcElementMappings": [
-                    {"ifcGuid": str(uuid.uuid4()), "pointIndices": [100, 101, 102]},
-                    {"ifcGuid": str(uuid.uuid4()), "pointIndices": [200, 201, 202]}
-                ]
-            }
-            json.dump(dummy_mapping_data, f, indent=2)
-        await asyncio.sleep(1) # Simulate saving
+        # Check if the output files were created and copy them to the expected names
+        generated_ifc_file = os.path.join(job_output_dir, f"{job_id}_model.ifc")
+        expected_ifc_file = os.path.join(job_output_dir, "model.ifc")
         
+        generated_mapping_file = os.path.join(job_output_dir, f"{job_id}_point_mapping.json")
+        expected_mapping_file = os.path.join(job_output_dir, "point_mapping.json")
+        
+        update_progress("Finalizing results", 90)
+        
+        # Copy/rename files to expected names for download endpoints
+        if os.path.exists(generated_ifc_file):
+            if generated_ifc_file != expected_ifc_file:
+                shutil.copy2(generated_ifc_file, expected_ifc_file)
+            logger.info(f"Job {job_id}: IFC file available at {expected_ifc_file}")
+        else:
+            raise FileNotFoundError(f"Expected IFC output file not found: {generated_ifc_file}")
+            
+        if os.path.exists(generated_mapping_file):
+            if generated_mapping_file != expected_mapping_file:
+                shutil.copy2(generated_mapping_file, expected_mapping_file)
+            logger.info(f"Job {job_id}: Point mapping file available at {expected_mapping_file}")
+        else:
+            logger.warning(f"Job {job_id}: Point mapping file not found: {generated_mapping_file}")
+        
+        # Final update
         jobs[job_id]["status"] = "completed"
         jobs[job_id]["stage"] = "Finished"
-        jobs[job_id]["progress"] = 100 # Ensure progress is 100% on completion
+        jobs[job_id]["progress"] = 100
         jobs[job_id]["message"] = "Conversion successful."
-        jobs[job_id]["result_url"] = f"/results/{job_id}/{result_filename_ifc}" 
-        logger.info(f"Job {job_id}: Processing completed. Results: {result_filepath_ifc}, {result_filepath_mapping}")
+        logger.info(f"Job {job_id}: Processing completed successfully.")
 
     except ValueError as ve: # Catch specific, known errors first
         logger.error(f"Job {job_id}: Validation error during processing: {ve}")
@@ -174,20 +176,25 @@ async def process_conversion_job(job_id: str, original_ptx_filename: str, config
 @app.post("/convert", response_model=Job, status_code=202) # Set status_code to 202 Accepted
 async def create_conversion_job(
     background_tasks: BackgroundTasks,
-    ptx_file: UploadFile = File(..., description="PTX or XYZ point cloud file"),
+    point_cloud_file: UploadFile = File(..., description="Point cloud file (PLY, PTX, or XYZ format)"),
     config_file: UploadFile = File(..., description="YAML configuration file")
 ):
     """
-    Accepts a point cloud file (PTX/XYZ) and a YAML configuration file,
+    Accepts a point cloud file (PTX/XYZ/PLY) and a YAML configuration file,
     stores them for the job, starts an asynchronous conversion job, 
     and returns a job ID with status 202 (Accepted).
     """
     job_id = str(uuid.uuid4())
     
-    # Validate file types (basic validation)
-    if not (ptx_file.filename.endswith((".ptx", ".xyz"))):
-        raise HTTPException(status_code=400, detail="Invalid point cloud file type. Must be .ptx or .xyz")
-    if not (config_file.filename.endswith((".yaml", ".yml"))):
+    # Validate file extensions
+    if not validate_file_format(point_cloud_file.filename):
+        supported_formats_str = ", ".join(SUPPORTED_FORMATS)
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Unsupported file format. Supported formats are: {supported_formats_str}"
+        )
+
+    if not config_file.filename.lower().endswith(('.yaml', '.yml')):
         raise HTTPException(status_code=400, detail="Invalid configuration file type. Must be .yaml or .yml")
 
     # Create job-specific directories
@@ -202,17 +209,17 @@ async def create_conversion_job(
     # The `save_upload_file` function handles the actual saving.
     
     # Sanitize filenames (basic example, consider more robust sanitization)
-    safe_ptx_filename = f"{job_id}_{os.path.basename(ptx_file.filename)}"
+    safe_point_cloud_filename = f"{job_id}_{os.path.basename(point_cloud_file.filename)}"
     # Config file is read into memory, so its disk name is less critical here if not saved long-term
     # safe_config_filename = f"{job_id}_{os.path.basename(config_file.filename)}"
 
-    ptx_filepath = os.path.join(job_input_dir, safe_ptx_filename)
+    point_cloud_filepath = os.path.join(job_input_dir, safe_point_cloud_filename)
     # config_filepath = os.path.join(job_input_dir, safe_config_filename) # If we were to save config file
 
     try:
         # Save uploaded files
-        save_upload_file(ptx_file, ptx_filepath)
-        logger.info(f"Job {job_id}: Saved point cloud file to {ptx_filepath}")
+        save_upload_file(point_cloud_file, point_cloud_filepath)
+        logger.info(f"Job {job_id}: Saved point cloud file to {point_cloud_filepath}")
         
         # Read config file content
         config_content = await config_file.read()
@@ -223,7 +230,7 @@ async def create_conversion_job(
         logger.error(f"Error saving uploaded files for job {job_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Could not save uploaded files: {e}")
     finally:
-        await ptx_file.close()
+        await point_cloud_file.close()
         await config_file.close()
 
     # Initialize job status
@@ -232,8 +239,8 @@ async def create_conversion_job(
         "stage": "Queued",
         "progress": 0, # Initial progress
         "message": "Job received and queued for processing.",
-        "ptx_file_path": ptx_filepath, # Store the actual path to the saved PTX
-        "original_ptx_filename": os.path.basename(ptx_file.filename), # Store original for reference
+        "point_cloud_file_path": point_cloud_filepath, # Store the actual path to the saved PTX
+        "original_point_cloud_filename": os.path.basename(point_cloud_file.filename), # Store original for reference
         # "config_content": config_content_str # Already stored
     }
     # Add config_content_str to the job entry if it's not already implicitly handled
@@ -243,7 +250,7 @@ async def create_conversion_job(
 
     # Add the processing to background tasks
     # Pass the original filename to be used by process_conversion_job if needed for output naming
-    background_tasks.add_task(process_conversion_job, job_id, os.path.basename(ptx_file.filename), config_content_str)
+    background_tasks.add_task(process_conversion_job, job_id, os.path.basename(point_cloud_file.filename), config_content_str)
 
     # Return 202 Accepted status code as per todo.md
     # The response_model will still be Job, but FastAPI handles the status code.

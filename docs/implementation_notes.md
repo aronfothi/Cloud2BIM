@@ -4,19 +4,19 @@
 
 ### 1. Point Cloud Processing Pipeline
 - [x] Basic framework setup
-- [x] File loading (PTX/XYZ)
+- [x] File loading (PLY/PTX/XYZ)
 - [x] Progress tracking
 - [x] Job status management
+- [x] Input validation and format detection
 - [ ] Advanced error handling
-- [ ] Input validation
 
 ### 2. Point Cloud Processing Features
 #### 2.1 Preprocessing
-- [x] Point cloud loading for PTX/XYZ formats
+- [x] Point cloud loading for PLY/PTX/XYZ formats
 - [x] Downsampling using voxel grid
 - [x] Noise removal using statistical outlier removal
-- [ ] Color information handling
-- [ ] Normal estimation
+- [x] Color information handling
+- [x] Normal estimation
 - [ ] Point cloud registration (for multiple scans)
 
 #### 2.2 Element Detection

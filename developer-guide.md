@@ -4,7 +4,7 @@ This guide provides instructions for setting up the development environment, run
 
 ## 1. Project Overview
 
-The Cloud2BIM Async Web Service is a FastAPI application designed to convert 3D point cloud files (PTX/XYZ) and a YAML configuration into IFC BIM models. It uses the Cloud2BIM algorithm for point cloud segmentation and IfcOpenShell for IFC file generation. The processing is handled asynchronously to manage potentially long-running conversion tasks.
+The Cloud2BIM Async Web Service is a FastAPI application designed to convert 3D point cloud files (PLY/PTX/XYZ) and a YAML configuration into IFC BIM models. It uses the Cloud2BIM algorithm for point cloud segmentation and IfcOpenShell for IFC file generation. The processing is handled asynchronously to manage potentially long-running conversion tasks.
 
 ## 2. Prerequisites
 
@@ -12,16 +12,25 @@ The Cloud2BIM Async Web Service is a FastAPI application designed to convert 3D 
 *   **Git**: For version control.
 *   **Virtual Environment Tool**: `venv` (recommended) or `conda`.
 
-## 3. Setup Instructions
+## 3. Supported File Formats
 
-### 3.1. Clone the Repository
+The service accepts the following point cloud file formats:
+* **PLY** (Polygon File Format): A common 3D format that can store point cloud data with various properties
+* **PTX**: Leica's point cloud format that includes transformation matrices
+* **XYZ**: Simple text format storing coordinates and optional color information
+
+All formats are converted internally to a standardized format for processing. The service automatically detects the input format based on the file extension.
+
+## 4. Setup Instructions
+
+### 4.1. Clone the Repository
 
 ```bash
 git clone <your-repository-url> # Replace with your actual repository URL
 cd Cloud2BIM_web
 ```
 
-### 3.2. Create and Activate Virtual Environment
+### 4.2. Create and Activate Virtual Environment
 
 Using `venv`:
 ```bash
@@ -29,7 +38,7 @@ python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```
 
-### 3.3. Install Dependencies
+### 4.3. Install Dependencies
 
 All required Python packages are listed in `requirements.txt`.
 ```bash
@@ -37,7 +46,7 @@ pip install -r requirements.txt
 ```
 This will install FastAPI, Uvicorn, IfcOpenShell, NumPy, Open3D, PyYAML, requests, and other necessary libraries.
 
-### 3.4. Configuration
+### 4.4. Configuration
 
 The main application configuration is handled via YAML files.
 *   Global application settings (if any) might be in `app/config/settings.py` or similar.
@@ -45,9 +54,9 @@ The main application configuration is handled via YAML files.
 
 Default processing parameters can be found in `app/config/config.yaml`. This file is used as a fallback or template if a user doesn't provide a complete configuration.
 
-## 4. Running the Service Locally
+## 5. Running the Service Locally
 
-### 4.1. Start the FastAPI Server
+### 5.1. Start the FastAPI Server
 
 Use Uvicorn to run the FastAPI application:
 ```bash
@@ -58,7 +67,7 @@ uvicorn app.main:app --reload --port 8005
 
 Once running, the API documentation (Swagger UI) will be available at [http://localhost:8005/docs](http://localhost:8005/docs).
 
-### 4.2. Using the CLI Client
+### 5.2. Using the CLI Client
 
 A command-line client is provided in `client/client.py` to interact with the service.
 The client is responsible for reading various point cloud file formats (e.g., PLY, PTX, XYZ), merging them if multiple files are provided, and sending a single standardized point cloud file to the server.
@@ -71,7 +80,7 @@ python client/client.py tests/data/scan6.ptx tests/data/sample_config.yaml --ser
 ```
 This will upload the files, poll for status, and download the resulting IFC model and point mapping JSON.
 
-## 5. Project Structure
+## 6. Project Structure
 
 ```
 Cloud2BIM_web/

@@ -13,27 +13,24 @@ from typing import Tuple, List, Optional
 DEFAULT_SERVER_URL = "http://localhost:8000" # Keep existing default or update if necessary
 SUPPORTED_FORMATS = ['.ply', '.ptx', '.xyz', '.pcd'] # Added PCD as a common format
 
-def read_ptx_file(file_path: str, subsample: int = 1) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+def read_custom_ptx(file_path: str, downsample_steps=1) -> o3d.geometry.PointCloud:
     """
-    Read a PTX file and return points and colors (if available).
+    Read a PTX file in the format used in our test data.
     
-    PTX Format:
-    - Line 1-4: Scanner transformation matrix (4x4)
-    - Line 5: Number of columns (width)
-    - Line 6: Number of rows (height)
-    - Line 7-10: Scanner registration matrix (4x4)
-    - Line 11: Scanner position
-    - Line 12: Additional info
+    The expected PTX format is:
+    - Line 1: Number of rows
+    - Line 2: Number of columns
+    - Line 3: Scanner position (3 values)
+    - Line 4-6: Scanner axes (3 values each)
+    - Line 7-10: Transformation matrix (4 values each)
+    - Line 11: Additional info
     - Remaining lines: Point data (x, y, z, intensity, r, g, b)
     
     Args:
         file_path: Path to the PTX file
-        subsample: Read every nth point (default=1, i.e., read all points)
         
     Returns:
-        Tuple containing:
-        - numpy array of shape (N, 3) containing point coordinates
-        - numpy array of shape (N, 3) containing RGB colors, or None if no colors
+        Open3D PointCloud object
     """
     points = []
     colors = []
@@ -42,120 +39,52 @@ def read_ptx_file(file_path: str, subsample: int = 1) -> Tuple[np.ndarray, Optio
         with open(file_path, 'r') as f:
             lines = [line.strip() for line in f.readlines()]
             
-            if len(lines) < 12:  # Minimum header size
+            # Parse header
+            if len(lines) < 11:
                 raise ValueError("PTX file too short")
                 
-            try:
-                # Parse transformation matrix (first 4 lines)
-                transform = np.zeros((4, 4))
-                for i in range(4):
-                    values = lines[i].split()
-                    if len(values) != 4:
-                        raise ValueError(f"Invalid transformation matrix row {i+1}")
-                    transform[i] = [float(x) for x in values]
-
-                # Parse dimensions
-                width = int(lines[4])
-                height = int(lines[5])
+            # Read rows and columns
+            rows = int(lines[0])
+            cols = int(lines[1])
+            
+            # Skip the scanner position and axes info (lines 3-6)
+            # Skip the transformation matrix (lines 7-10)
+            
+            # Start reading point data from line 11
+            data_start = 11
+            
+            for i in range(data_start, len(lines), downsample_steps):
+                line = lines[i]
+                if not line:
+                    continue
                 
-                # Skip registration matrix and other header info (lines 7-12)
-                data_start = 12
-                
-                # Read point data (subsampling if requested)
-                for i in range(data_start, len(lines), subsample):
-                    line = lines[i]
-                    if not line:
-                        continue
-                    
-                    try:
-                        values = [float(x) for x in line.split()]
-                        if len(values) >= 3:  # At least XYZ coordinates
-                            points.append(values[:3])
-                            if len(values) >= 7:  # Has RGB values
-                                # Normalize RGB values to [0,1] range if they're in [0,255]
-                                r, g, b = values[4:7]
-                                if max(r, g, b) > 1.0:
-                                    r, g, b = r/255.0, g/255.0, b/255.0
-                                colors.append([r, g, b])
-                    except (ValueError, IndexError):
-                        # Skip invalid lines
-                        continue
-
-            except (ValueError, IndexError) as e:
-                raise ValueError(f"Error parsing PTX file: {str(e)}")
-
+                try:
+                    values = [float(x) for x in line.split()]
+                    if len(values) >= 3:  # At least XYZ coordinates
+                        points.append(values[:3])
+                        if len(values) >= 7:  # Has RGB values
+                            # Normalize RGB values to [0,1] range if they're in [0,255]
+                            r, g, b = values[4:7]
+                            if max(r, g, b) > 1.0:
+                                r, g, b = r/255.0, g/255.0, b/255.0
+                            colors.append([r, g, b])
+                except (ValueError, IndexError):
+                    # Skip invalid lines
+                    continue
     except Exception as e:
         raise ValueError(f"Failed to read PTX file {file_path}: {str(e)}")
     
     if not points:
-        raise ValueError("No valid points found in PTX file")
+        raise ValueError(f"No valid points found in PTX file: {file_path}")
     
-    points_array = np.array(points, dtype=np.float64)
-    colors_array = np.array(colors, dtype=np.float64) if colors else None
+    # Create Open3D point cloud
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(np.array(points))
     
-    try:
-        # Apply transformation matrix to points
-        # Add homogeneous coordinate (w=1) to each point
-        points_homogeneous = np.hstack([points_array, np.ones((points_array.shape[0], 1))])
-        
-        # Apply transformation
-        transformed_points = np.dot(points_homogeneous, transform.T)
-        
-        # Get the w coordinates
-        w = transformed_points[:, 3]
-        
-        # Normalize x, y, z by w where w is not close to zero
-        mask = np.abs(w) > 1e-8
-        transformed_points[mask, :3] /= w[mask, np.newaxis]
-        
-        # Return only x, y, z coordinates
-        return transformed_points[:, :3], colors_array
-        
-    except Exception as e:
-        raise ValueError(f"Error transforming points: {str(e)}")
-
-def read_point_cloud(file_path: str, subsample: int = 1) -> o3d.geometry.PointCloud | None:
-    """
-    Reads a point cloud file into an Open3D PointCloud object.
-
-    Args:
-        file_path: Path to the point cloud file
-        subsample: Read every nth point for PTX files (default=1, read all points)
-
-    Returns:
-        Open3D PointCloud object or None if loading fails
-    """
-    try:
-        pcd = o3d.geometry.PointCloud()
-        ext = os.path.splitext(file_path)[1].lower()
-        
-        if ext == '.ptx':
-            try:
-                points, colors = read_ptx_file(file_path, subsample)
-                pcd.points = o3d.utility.Vector3dVector(points)
-                if colors is not None:
-                    pcd.colors = o3d.utility.Vector3dVector(colors)
-            except Exception as e:
-                print(f"Error reading point cloud file {file_path}: {str(e)}")
-                return None
-        else:
-            try:
-                # For other formats, use Open3D's built-in reader
-                pcd = o3d.io.read_point_cloud(file_path)
-                if len(pcd.points) == 0:  # Return None for empty point clouds
-                    return None
-                if subsample > 1:
-                    # Subsample after loading for other formats
-                    pcd = pcd.uniform_down_sample(every_k_points=subsample)
-            except Exception as e:
-                print(f"Error reading point cloud file {file_path}: {str(e)}")
-                return None
-        
-        return pcd if len(pcd.points) > 0 else None
-        
-    except Exception as e:
-        print(f"Error reading point cloud file {file_path}: {str(e)}")
-        return None
+    if colors and len(colors) == len(points):
+        pcd.colors = o3d.utility.Vector3dVector(np.array(colors))
+    
+    return pcd
 
 def merge_point_clouds(pcd_files: List[str | Path], subsample: int = 1) -> o3d.geometry.PointCloud | None:
     """
@@ -258,7 +187,7 @@ def poll_job_status(server_url: str, job_id: str) -> dict | None:
     
     while True:
         try:
-            response = requests.get(status_url, timeout=10) # Added timeout
+            response = requests.get(status_url, timeout=40) # Increased timeout from 20 to 30 seconds
             response.raise_for_status()
             status_data = response.json()
             
@@ -312,7 +241,7 @@ def main():
     parser.add_argument("point_cloud_files", nargs='+', help=f"Path(s) to point cloud file(s). Supported formats: {SUPPORTED_FORMATS}")
     parser.add_argument("config_file", help="Path to the .yaml configuration file.")
     parser.add_argument("--server_url", default=DEFAULT_SERVER_URL, help=f"URL of the Cloud2BIM server (default: {DEFAULT_SERVER_URL}).")
-    parser.add_argument("--output_dir", default=".", help="Directory to save downloaded result files (default: current directory).")
+    parser.add_argument("--output_dir", default="./out", help="Directory to save downloaded result files (default: ./out directory).")
     parser.add_argument("--merged_output_filename", default="merged_point_cloud.ply", help="Filename for the temporary merged PLY file (default: merged_point_cloud.ply).")
     parser.add_argument("--subsample", type=int, default=1, help="Read every nth point for PTX files to reduce file size (default: 1, read all points)")
 
@@ -353,7 +282,7 @@ def main():
             return
     elif len(valid_pcd_files) == 1:
         print(f"Processing single point cloud file: {valid_pcd_files[0]}")
-        merged_pcd = read_point_cloud(valid_pcd_files[0], subsample=args.subsample)
+        merged_pcd = read_custom_ptx(valid_pcd_files[0], downsample_steps=args.subsample)
         if not merged_pcd:
             print(f"Failed to read point cloud file {valid_pcd_files[0]}. Exiting.")
             return
@@ -391,6 +320,10 @@ def main():
     # 4. If completed, download results
     if status_data.get("status") == "completed":
         print("Job completed successfully. Downloading results...")
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(args.output_dir, exist_ok=True)
+        
         ifc_downloaded = download_result_file(args.server_url, job_id, "model.ifc", args.output_dir)
         # Assuming point_mapping.json is still a relevant output
         mapping_downloaded = download_result_file(args.server_url, job_id, "point_mapping.json", args.output_dir)
