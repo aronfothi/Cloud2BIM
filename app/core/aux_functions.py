@@ -6,20 +6,23 @@ import random
 from datetime import datetime
 from itertools import islice
 
+from matplotlib.patches import Polygon
+
 import yaml
 import cv2
 import pandas as pd
+import numpy as np
 from scipy.signal import find_peaks
 from skimage.morphology import closing, rectangle
 import open3d as o3d
 import e57
 from tqdm import tqdm
-from .plotting_functions import *
+#from .plotting_functions import *
 import logging # Add logging import
 
 logger_aux = logging.getLogger(__name__) # Create a logger instance
 
-def load_config_and_variables(config_path: str | None = None):  # Added config_path parameter
+def load_config_and_variables_new(config_path: str | None = None):  # Added config_path parameter
     """Load YAML config, validate required keys, and return configuration variables."""
     
     effective_config_path = config_path
@@ -65,7 +68,7 @@ def load_config_and_variables(config_path: str | None = None):  # Added config_p
     # We now have a more flexible approach to configuration
     # Minimal required sections
     required_keys = [
-        "detection"  # Only require detection section as minimum
+        #"detection"  # Only require detection section as minimum
     ]
 
     missing_keys = [key for key in required_keys if key not in config]
@@ -129,6 +132,82 @@ def load_config_and_variables(config_path: str | None = None):  # Added config_p
 
     # return variables
 
+
+def load_config_and_variables():
+    """Load YAML config passed as CLI argument, validate required keys, and return configuration variables."""
+    if len(sys.argv) < 2:
+        # Default fallback path for development
+        config_path = "config.yaml"  # nebo celá cesta
+        print("[INFO] No argument provided, using input configuration file in directory of project:", config_path)
+    else:
+        config_path = sys.argv[1]
+
+    if not os.path.isfile(config_path):
+        sys.exit(f"[ERROR] File '{config_path}' does not exist.")
+
+    try:
+        with open(config_path, 'r') as file:
+            config = yaml.safe_load(file)
+    except yaml.YAMLError as e:
+        sys.exit(f"[ERROR] Invalid YAML format in '{config_path}': {e}")
+    except Exception as e:
+        sys.exit(f"[ERROR] Failed to load configuration file: {e}")
+
+    required_keys = [
+        "e57_input", "xyz_files", "exterior_scan",
+        "dilute", "dilution_factor", "pc_resolution", "grid_coefficient",
+        "bfs_thickness", "tfs_thickness",
+        "min_wall_length", "min_wall_thickness", "max_wall_thickness", "exterior_walls_thickness",
+        "output_ifc", "ifc_project_name", "ifc_project_long_name", "ifc_project_version",
+        "ifc_author_name", "ifc_author_surname", "ifc_author_organization",
+        "ifc_building_name", "ifc_building_type", "ifc_building_phase",
+        "ifc_site_latitude", "ifc_site_longitude", "ifc_site_elevation",
+        "material_for_objects"
+    ]
+
+    if config.get("e57_input"):
+        required_keys.append("e57_files")
+
+    missing = [key for key in required_keys if key not in config]
+    if missing:
+        for key in missing:
+            print(f"[ERROR] Missing required config key: '{key}'")
+        sys.exit(1)
+
+    variables = {
+        "e57_input": config["e57_input"],
+        "xyz_filenames": config["xyz_files"],
+        "exterior_scan": config["exterior_scan"],
+        "dilute_pointcloud": config["dilute"],
+        "dilution_factor": config["dilution_factor"],
+        "pc_resolution": config["pc_resolution"],
+        "grid_coefficient": config["grid_coefficient"],
+        "bfs_thickness": config["bfs_thickness"],
+        "tfs_thickness": config["tfs_thickness"],
+        "min_wall_length": config["min_wall_length"],
+        "min_wall_thickness": config["min_wall_thickness"],
+        "max_wall_thickness": config["max_wall_thickness"],
+        "exterior_walls_thickness": config["exterior_walls_thickness"],
+        "ifc_output_file": config["output_ifc"],
+        "ifc_project_name": config["ifc_project_name"],
+        "ifc_project_long_name": config["ifc_project_long_name"],
+        "ifc_project_version": config["ifc_project_version"],
+        "ifc_author_name": config["ifc_author_name"],
+        "ifc_author_surname": config["ifc_author_surname"],
+        "ifc_author_organization": config["ifc_author_organization"],
+        "ifc_building_name": config["ifc_building_name"],
+        "ifc_building_type": config["ifc_building_type"],
+        "ifc_building_phase": config["ifc_building_phase"],
+        "ifc_site_latitude": tuple(config["ifc_site_latitude"]),
+        "ifc_site_longitude": tuple(config["ifc_site_longitude"]),
+        "ifc_site_elevation": config["ifc_site_elevation"],
+        "material_for_objects": config["material_for_objects"]
+    }
+
+    if config["e57_input"]:
+        variables["e57_file_names"] = config["e57_files"]
+
+    return variables
 
 def log(message, last_time, filename):
     current_time = time.time()
@@ -305,7 +384,7 @@ def create_hull_from_histogram(points_3d, pointcloud_resolution, grid_coefficien
 
 
 def identify_slabs(points_xyz, points_rgb, bottom_floor_slab_thickness, top_floor_ceiling_thickness,
-                   z_step, pc_resolution, plot_segmented_plane=True):
+                   z_step, pc_resolution, plot_segmented_plane=False):
     z_min, z_max = min(points_xyz[:, 2]), max(points_xyz[:, 2])
     n_steps = int((z_max - z_min) / z_step + 1)
     z_array, n_points_array = [], []
@@ -337,6 +416,8 @@ def identify_slabs(points_xyz, points_rgb, bottom_floor_slab_thickness, top_floo
         elif start is not None:
             h_surf_candidates.append([z_array[start], z_array[i - 1] + z_step])
             start = None
+
+    if start is not None:
         h_surf_candidates.append([z_array[start], z_array[-1] + z_step])
 
     merged_candidates = []
@@ -368,7 +449,7 @@ def identify_slabs(points_xyz, points_rgb, bottom_floor_slab_thickness, top_floo
             slab_top_z_coord = np.median(horiz_surface_planes[i][:, 2])
             slab_bottom_z_coord = slab_top_z_coord - bottom_floor_slab_thickness
             x_coords, y_coords, polygon = create_hull_from_histogram(horiz_surface_planes[i], pc_resolution,
-                                                                     grid_coefficient=5, plot_graphics=True,
+                                                                     grid_coefficient=5, plot_graphics=False,
                                                                      dilation_meters=1.0, erosion_meters=1.0)
             slabs.append({'polygon': polygon, 'polygon_x_coords': x_coords, 'polygon_y_coords': y_coords,
                           'slab_bottom_z_coord': slab_bottom_z_coord, 'thickness': bottom_floor_slab_thickness})
@@ -384,7 +465,7 @@ def identify_slabs(points_xyz, points_rgb, bottom_floor_slab_thickness, top_floo
 
             # create hull for the slab
             x_coords, y_coords, polygon = create_hull_from_histogram(slab_points, pc_resolution,
-                                                                     grid_coefficient=5, plot_graphics=True,
+                                                                     grid_coefficient=5, plot_graphics=False,
                                                                      dilation_meters=1.5, erosion_meters=1.5)
             slabs.append({'polygon': polygon, 'polygon_x_coords': x_coords, 'polygon_y_coords': y_coords,
                           'slab_bottom_z_coord': slab_bottom_z_coord, 'thickness': slab_thickness})
@@ -397,14 +478,14 @@ def identify_slabs(points_xyz, points_rgb, bottom_floor_slab_thickness, top_floo
 
             # create hull for the slab
             x_coords, y_coords, polygon = create_hull_from_histogram(horiz_surface_planes[i], pc_resolution,
-                                                                     grid_coefficient=5, plot_graphics=True,
+                                                                     grid_coefficient=5, plot_graphics=False,
                                                                      dilation_meters=1.5, erosion_meters=1.5)
             slabs.append({'polygon': polygon, 'polygon_x_coords': x_coords, 'polygon_y_coords': y_coords,
                           'slab_bottom_z_coord': slab_bottom_z_coord, 'thickness': top_floor_ceiling_thickness})
             print('Slab no. %d: bottom (z-coordinate) = %.3f m, thickness = %0.1f mm'
                   % ((i + 1) / 2, slab_bottom_z_coord, top_floor_ceiling_thickness * 1000))
 
-        save_xyz(horiz_surface_planes[i], 'output_xyz/horiz_surface_%d.xyz' % (i + 1))
+        save_xyz(horiz_surface_planes[i], '/home/fothar/Cloud2BIM_web/tests/data/output_xyz/horiz_surface_%d.xyz' % (i + 1))
 
     # plot the segmented plane
     pcd = []
@@ -946,18 +1027,18 @@ def identify_walls(pointcloud, pointcloud_resolution, minimum_wall_length, minim
     y_values_full = np.arange(y_min + 0.5 * pixel_size, y_max, pixel_size)
     grid_full, _, _ = np.histogram2d(points_2d[:, 0], points_2d[:, 1], bins=[x_values_full, y_values_full])
     grid_full = grid_full.T
-    plot_histogram(grid_full, x_values_full, y_values_full)
+    #plot_histogram(grid_full, x_values_full, y_values_full)
 
     # Convert the 2D histogram to binary (mask) based on a threshold
     threshold = 0.01  # relative point cloud density
     print("Converting the 2D histogram to binary (mask) based on a threshold")
     binary_image = (grid_full > threshold).astype(np.uint8) * 255
-    plot_binary_image(binary_image)
+    #plot_binary_image(binary_image)
 
     # Pre-process the binary image
     print("Pre-processing the binary image")
-    binary_image = closing(binary_image, footprint_rectangle((5, 5))) # closes small holes in the binary mask
-    plot_binary_image(binary_image)
+    binary_image = closing(binary_image, rectangle(5, 5)) # closes small holes in the binary mask
+    #plot_binary_image(binary_image)
 
     # Find contours in the binary image
     print("Finding contours in the binary image")
@@ -973,7 +1054,7 @@ def identify_walls(pointcloud, pointcloud_resolution, minimum_wall_length, minim
         transformation_matrix = np.float32([[1, 0, shift_x], [0, 1, shift_y]])
         adjusted_cnt = cv2.transform(cnt, transformation_matrix)
         adjusted_contours.append(adjusted_cnt)
-    plot_contours(adjusted_contours)
+    #plot_contours(adjusted_contours)
 
     # Extract all segments from contours
     print("Extracting all segments from contours with Douglas-Peuckert algorithm")
@@ -992,13 +1073,13 @@ def identify_walls(pointcloud, pointcloud_resolution, minimum_wall_length, minim
     filtered_segments = [
         segment for segment in segments_in_world_coords
         if distance_between_points(segment[0], segment[1]) >= minimum_wall_length]
-    plot_segments_with_random_colors(filtered_segments, name="filtered_wall_segments")
+    #plot_segments_with_random_colors(filtered_segments, name="filtered_wall_segments")
 
     # Merge the co-linear segments using the updated function
     print("Merging the co-linear segments")
     final_wall_segments = merge_collinear_segments(filtered_segments.copy(), minimum_wall_thickness,
                                                    maximum_wall_thickness)
-    plot_segments_with_random_colors(final_wall_segments, name="final_wall_segments")
+    #plot_segments_with_random_colors(final_wall_segments, name="final_wall_segments")
 
     # Group parallel segments
     print("Grouping parallel segments")
@@ -1015,7 +1096,7 @@ def identify_walls(pointcloud, pointcloud_resolution, minimum_wall_length, minim
         parallel_groups.extend(parallel_facade_groups)
         wall_labels.extend(wall_labels_facade)
 
-    plot_parallel_wall_groups(parallel_groups)
+    #plot_parallel_wall_groups(parallel_groups)
     # plot_segments_with_candidates(facade_wall_candidates)
 
     wall_axes, wall_thicknesses = [], []

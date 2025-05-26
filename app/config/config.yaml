@@ -1,6 +1,7 @@
-exterior_scan: false
 dilute: false
 dilution_factor: 10
+exterior_scan: false
+pc_resolution: 0.002
 preprocessing:
   voxel_size: 0.002
   noise_threshold: 0.02
@@ -20,16 +21,16 @@ ifc:
   project_long_name: Deconstruction of non-load-bearing elements
   version: version 1.0
 
-ifc_author_name: Slavek
-ifc_author_surname: Zbirovsky
-ifc_author_organization: CTU in Prague
+  author_name: Slavek
+  author_surname: Zbirovsky
+  author_organization: CTU in Prague
 
-ifc_building_name: Hotel Opatov
-ifc_building_type: Hotel
-ifc_building_phase: Reconstruction
+  building_name: Hotel Opatov
+  building_type: Hotel
+  building_phase: Reconstruction
 
-ifc_site_latitude: [50, 5, 0]
-ifc_site_longitude: [4, 22, 0]
-ifc_site_elevation: 356.0
+  site_latitude: [50, 5, 0]
+  site_longitude: [4, 22, 0]
+  site_elevation: 356.0
 
 material_for_objects: Concrete
