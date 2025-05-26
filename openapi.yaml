@@ -1,0 +1,474 @@
+openapi: 3.0.3
+info:
+  title: Cloud2BIM API
+  description: |
+    Cloud2BIM service converts 3D point cloud files into IFC BIM models using advanced segmentation algorithms.
+    
+    ## Features
+    - Support for PTX, XYZ, and PLY point cloud formats
+    - Real-time progress tracking via Server-Sent Events
+    - Automatic segmentation of walls, floors, and openings
+    - IFC model generation with point-to-element mapping
+    
+    ## Workflow
+    1. Submit point cloud file and configuration
+    2. Monitor progress via SSE or polling
+    3. Download generated IFC model and mapping data
+  version: 1.0.0
+  contact:
+    name: Cloud2BIM API Support
+  license:
+    name: MIT
+servers:
+  - url: http://localhost:8001
+    description: Development server
+  - url: https://your-domain.com
+    description: Production server
+    
+paths:
+  /:
+    get:
+      summary: Get service information
+      description: Returns basic information about the Cloud2BIM service and available endpoints
+      tags:
+        - Service Info
+      responses:
+        '200':
+          description: Service information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceInfo'
+              example:
+                service: "Cloud2BIM Service"
+                version: "1.0.0"
+                description: "Async point cloud to IFC BIM model conversion service"
+                
+  /convert:
+    post:
+      summary: Submit conversion job
+      description: |
+        Submit a point cloud file and configuration for conversion to IFC BIM model.
+        The job is processed asynchronously and returns immediately with a job ID.
+      tags:
+        - Conversion
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                point_cloud_file:
+                  type: string
+                  format: binary
+                  description: Point cloud file (PTX, XYZ, or PLY format)
+                config_file:
+                  type: string
+                  format: binary
+                  description: YAML configuration file
+              required:
+                - point_cloud_file
+                - config_file
+      responses:
+        '202':
+          description: Job submitted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+              example:
+                job_id: "550e8400-e29b-41d4-a716-446655440000"
+                status: "pending"
+                message: "Job submitted successfully"
+                stage: "queued"
+                progress: 0
+        '400':
+          description: Bad request - invalid file format or missing files
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+                
+  /status/{job_id}:
+    get:
+      summary: Get job status
+      description: Get the current status and progress of a conversion job
+      tags:
+        - Status
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          description: UUID of the conversion job
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: Job status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+              example:
+                job_id: "550e8400-e29b-41d4-a716-446655440000"
+                status: "processing"
+                message: "Detecting walls and openings"
+                stage: "wall_detection"
+                progress: 65
+        '404':
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+                
+  /results/{job_id}/model.ifc:
+    get:
+      summary: Download IFC model
+      description: Download the generated IFC BIM model file
+      tags:
+        - Results
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          description: UUID of the completed conversion job
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: IFC model file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Job not found or not completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+                
+  /results/{job_id}/point_mapping.json:
+    get:
+      summary: Download point mapping
+      description: Download the point-to-element mapping data in JSON format
+      tags:
+        - Results
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          description: UUID of the completed conversion job
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Point mapping data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PointMapping'
+        '404':
+          description: Job not found or not completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+                
+  /api/stream/progress/{job_id}:
+    get:
+      summary: Stream detailed progress (SSE)
+      description: |
+        Get real-time progress updates using Server-Sent Events.
+        Provides detailed progress information including stage descriptions and performance metrics.
+      tags:
+        - Streaming
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          description: UUID of the conversion job to monitor
+          schema:
+            type: string
+            format: uuid
+        - name: Accept
+          in: header
+          required: true
+          description: Must be 'text/event-stream' for SSE
+          schema:
+            type: string
+            enum: ['text/event-stream']
+      responses:
+        '200':
+          description: Server-Sent Events stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                progress_event:
+                  summary: Progress update event
+                  value: |
+                    event: progress
+                    data: {"job_id": "550e8400-e29b-41d4-a716-446655440000", "status": "processing", "progress": {"percentage": 45, "stage_description": "Detecting walls"}}
+                    
+                error_event:
+                  summary: Error event
+                  value: |
+                    event: error
+                    data: {"error": "Processing failed"}
+                    
+                complete_event:
+                  summary: Completion event
+                  value: |
+                    event: complete
+                    data: {"status": "completed"}
+        '404':
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+                
+  /api/stream/basic/{job_id}:
+    get:
+      summary: Stream basic progress (SSE)
+      description: |
+        Get basic progress percentage updates using Server-Sent Events.
+        Simplified version that only sends percentage values.
+      tags:
+        - Streaming
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          description: UUID of the conversion job to monitor
+          schema:
+            type: string
+            format: uuid
+        - name: Accept
+          in: header
+          required: true
+          description: Must be 'text/event-stream' for SSE
+          schema:
+            type: string
+            enum: ['text/event-stream']
+      responses:
+        '200':
+          description: Server-Sent Events stream with basic progress
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: |
+                event: progress
+                data: 45
+                
+                event: progress  
+                data: 67
+                
+                event: complete
+                data: completed
+        '404':
+          description: Job not found
+
+components:
+  schemas:
+    ServiceInfo:
+      type: object
+      properties:
+        service:
+          type: string
+          example: "Cloud2BIM Service"
+        version:
+          type: string
+          example: "1.0.0"
+        description:
+          type: string
+          example: "Async point cloud to IFC BIM model conversion service"
+        endpoints:
+          type: object
+          additionalProperties:
+            type: string
+            
+    Job:
+      type: object
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          description: Unique identifier for the conversion job
+        status:
+          type: string
+          enum: [pending, processing, completed, failed]
+          description: Current status of the job
+        message:
+          type: string
+          nullable: true
+          description: Human-readable status message
+        stage:
+          type: string
+          nullable: true
+          description: Current processing stage
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          description: Progress percentage (0-100)
+      required:
+        - job_id
+        - status
+      example:
+        job_id: "550e8400-e29b-41d4-a716-446655440000"
+        status: "processing"
+        message: "Detecting walls and openings"
+        stage: "wall_detection"
+        progress: 65
+        
+    ProgressDetail:
+      type: object
+      properties:
+        percentage:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: Progress percentage
+        stage:
+          type: string
+          description: Current processing stage identifier
+        stage_description:
+          type: string
+          description: Human-readable stage description
+        estimated_remaining:
+          type: string
+          description: Estimated time remaining (HH:MM:SS format)
+        processing_speed:
+          type: string
+          description: Current processing speed
+      example:
+        percentage: 45
+        stage: "wall_detection"
+        stage_description: "Detecting walls and openings"
+        estimated_remaining: "00:02:30"
+        processing_speed: "15000 points/sec"
+        
+    PerformanceMetrics:
+      type: object
+      properties:
+        cpu_percent:
+          type: number
+          description: CPU usage percentage
+        memory_percent:
+          type: number
+          description: Memory usage percentage
+        memory_used_mb:
+          type: number
+          description: Memory used in megabytes
+      example:
+        cpu_percent: 78.5
+        memory_percent: 42.1
+        memory_used_mb: 1024
+        
+    PointMapping:
+      type: object
+      properties:
+        total_points:
+          type: integer
+          description: Total number of points in the point cloud
+        mapped_points:
+          type: integer
+          description: Number of points mapped to BIM elements
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/MappedElement'
+      example:
+        total_points: 2777608
+        mapped_points: 2456789
+        elements:
+          - element_id: "wall_001"
+            element_type: "IfcWall"
+            point_indices: [1, 2, 3, 156, 157, 158]
+            point_count: 125678
+            
+    MappedElement:
+      type: object
+      properties:
+        element_id:
+          type: string
+          description: Unique identifier of the BIM element
+        element_type:
+          type: string
+          description: IFC element type
+        point_indices:
+          type: array
+          items:
+            type: integer
+          description: Indices of points belonging to this element
+        point_count:
+          type: integer
+          description: Number of points in this element
+          
+    Error:
+      type: object
+      properties:
+        detail:
+          type: string
+          description: Error message
+      required:
+        - detail
+      example:
+        detail: "Job not found"
+        
+    ValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              loc:
+                type: array
+                items:
+                  oneOf:
+                    - type: string
+                    - type: integer
+              msg:
+                type: string
+              input:
+                nullable: true
+      example:
+        detail:
+          - type: "missing"
+            loc: ["body", "config_file"]
+            msg: "Field required"
+            input: null
+
+tags:
+  - name: Service Info
+    description: Service information and health checks
+  - name: Conversion  
+    description: Point cloud to IFC conversion operations
+  - name: Status
+    description: Job status and progress monitoring
+  - name: Results
+    description: Download conversion results
+  - name: Streaming
+    description: Real-time progress updates via Server-Sent Events

@@ -90,8 +90,6 @@ class CloudToBimProcessor:
         if self.progress_callback:
             self.progress_callback(stage, progress)
         self._log(f"Progress: {stage} - {progress}%")
-        # Add a small delay to make progress visible
-        time.sleep(0.5)  # Half second delay for demo purposes
 
     def _update_detailed_progress(self, stage: ProcessingStage, percentage: int, 
                                 current_operation: str = None, 
