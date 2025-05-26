@@ -1,6 +1,7 @@
 """
 Tests the integration between CloudToBimProcessor and client components.
 """
+
 import os
 import uuid
 import pytest
@@ -15,6 +16,7 @@ from app.main import app
 from app.core.cloud2entities import CloudToBimProcessor
 from app.core.aux_functions import load_config_and_variables
 from client.client import read_point_cloud, merge_point_clouds
+
 
 class TestCloudToBimIntegration:
     @pytest.fixture(autouse=True)
@@ -55,31 +57,31 @@ class TestCloudToBimIntegration:
         # Convert point cloud to standard format for transmission
         points = np.asarray(pcd.points).tolist()
         colors = np.asarray(pcd.colors).tolist() if pcd.has_colors() else None
-        
+
         # Prepare point cloud data in standard format
         point_cloud_data = {
             "points": points,
             "colors": colors,
             "format": "ptx",
-            "filename": self.ptx_file_path.name
+            "filename": self.ptx_file_path.name,
         }
 
         # 2. Read configuration
-        with open(self.config_file_path, 'r') as f:
+        with open(self.config_file_path, "r") as f:
             config_data = f.read()
 
         # 3. Client-side: Prepare multipart form data
         files = {
-            'point_cloud': ('point_cloud.json', json.dumps(point_cloud_data), 'application/json'),
-            'config': ('config.yaml', config_data, 'application/x-yaml')
+            "point_cloud": ("point_cloud.json", json.dumps(point_cloud_data), "application/json"),
+            "config": ("config.yaml", config_data, "application/x-yaml"),
         }
 
         # 4. Client-side: Send request to server
         response = self.client.post("/api/v1/jobs/", files=files)
         assert response.status_code == 200, f"Failed to create job: {response.text}"
-        
+
         job_data = response.json()
-        job_id = job_data['job_id']
+        job_id = job_data["job_id"]
 
         # 5. Client-side: Poll for job completion
         max_polls = 30
@@ -89,13 +91,13 @@ class TestCloudToBimIntegration:
         for _ in range(max_polls):
             response = self.client.get(f"/api/v1/jobs/{job_id}/status")
             assert response.status_code == 200
-            
+
             status = response.json()
-            if status['status'] == 'completed':
+            if status["status"] == "completed":
                 break
-            elif status['status'] == 'failed':
+            elif status["status"] == "failed":
                 pytest.fail(f"Job failed: {status.get('message', 'Unknown error')}")
-            
+
             time.sleep(poll_interval)
         else:
             pytest.fail("Job timed out")
@@ -131,10 +133,10 @@ class TestCloudToBimIntegration:
         # 8. Check point mapping file
         response = self.client.get(f"/api/v1/jobs/{job_id}/results/point_mapping.json")
         assert response.status_code == 200
-        
+
         mapping_data = response.json()
-        assert 'slabs' in mapping_data, "Point mapping should include slabs"
-        assert 'walls' in mapping_data, "Point mapping should include walls"
+        assert "slabs" in mapping_data, "Point mapping should include slabs"
+        assert "walls" in mapping_data, "Point mapping should include walls"
 
     def test_error_handling_invalid_point_cloud(self):
         """Test server's handling of invalid point cloud data."""
@@ -142,15 +144,19 @@ class TestCloudToBimIntegration:
         invalid_point_cloud = {
             "points": [[0, 0, 0]],  # Too few points
             "colors": None,
-            "format": "ptx"
+            "format": "ptx",
         }
 
-        with open(self.config_file_path, 'r') as f:
+        with open(self.config_file_path, "r") as f:
             config_data = f.read()
 
         files = {
-            'point_cloud': ('point_cloud.json', json.dumps(invalid_point_cloud), 'application/json'),
-            'config': ('config.yaml', config_data, 'application/x-yaml')
+            "point_cloud": (
+                "point_cloud.json",
+                json.dumps(invalid_point_cloud),
+                "application/json",
+            ),
+            "config": ("config.yaml", config_data, "application/x-yaml"),
         }
 
         response = self.client.post("/api/v1/jobs/", files=files)
@@ -163,15 +169,15 @@ class TestCloudToBimIntegration:
         point_cloud_data = {
             "points": np.asarray(pcd.points).tolist(),
             "colors": np.asarray(pcd.colors).tolist() if pcd.has_colors() else None,
-            "format": "ptx"
+            "format": "ptx",
         }
 
         # Invalid config
         invalid_config = "invalid: : yaml:"
 
         files = {
-            'point_cloud': ('point_cloud.json', json.dumps(point_cloud_data), 'application/json'),
-            'config': ('config.yaml', invalid_config, 'application/x-yaml')
+            "point_cloud": ("point_cloud.json", json.dumps(point_cloud_data), "application/json"),
+            "config": ("config.yaml", invalid_config, "application/x-yaml"),
         }
 
         response = self.client.post("/api/v1/jobs/", files=files)

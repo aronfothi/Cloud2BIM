@@ -17,15 +17,18 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Cloud2BIM Service")
 
 # Supported file formats
-SUPPORTED_FORMATS = ['.ptx', '.xyz', '.ply']  # Added .ply format
+SUPPORTED_FORMATS = [".ptx", ".xyz", ".ply"]  # Added .ply format
+
 
 def validate_file_format(filename: str) -> bool:
     """Validates if the file has a supported extension."""
     return pathlib.Path(filename).suffix.lower() in SUPPORTED_FORMATS
 
+
 # In-memory store for job statuses
 # For production, consider a more robust solution like Redis or a database
 jobs: Dict[str, Dict[str, Any]] = {}
+
 
 # Define Pydantic models
 class Job(BaseModel):
@@ -33,24 +36,29 @@ class Job(BaseModel):
     status: str
     message: str | None = None
     result_url: str | None = None
-    stage: str | None = None # Added stage information
-    progress: int | None = None # Added progress percentage
+    stage: str | None = None  # Added stage information
+    progress: int | None = None  # Added progress percentage
+
 
 class ConversionRequest(BaseModel):
     config_yaml: str  # This will be the content of the YAML file as a string
 
-# --- Helper Functions ---
-JOBS_BASE_DIR = "jobs" # Base directory for all job-related files
 
-os.makedirs(JOBS_BASE_DIR, exist_ok=True) # Ensure base jobs directory exists
+# --- Helper Functions ---
+JOBS_BASE_DIR = "jobs"  # Base directory for all job-related files
+
+os.makedirs(JOBS_BASE_DIR, exist_ok=True)  # Ensure base jobs directory exists
+
 
 def get_job_input_dir(job_id: str) -> str:
     """Returns the input directory for a given job ID."""
     return os.path.join(JOBS_BASE_DIR, job_id, "input")
 
+
 def get_job_output_dir(job_id: str) -> str:
     """Returns the output directory for a given job ID."""
     return os.path.join(JOBS_BASE_DIR, job_id, "output")
+
 
 def save_upload_file(upload_file: UploadFile, destination: str) -> None:
     """Saves an uploaded file to the specified destination."""
@@ -60,20 +68,24 @@ def save_upload_file(upload_file: UploadFile, destination: str) -> None:
     finally:
         upload_file.file.close()
 
+
 def validate_file_extension(filename: str) -> bool:
     """Validates if the file has a supported extension."""
     return any(filename.lower().endswith(ext) for ext in SUPPORTED_FORMATS)
 
-async def process_conversion_job(job_id: str, original_point_cloud_filename: str, config_content_str: str):
+
+async def process_conversion_job(
+    job_id: str, original_point_cloud_filename: str, config_content_str: str
+):
     """
     Processes the point cloud to IFC conversion using the CloudToBimProcessor.
     """
     from app.core.cloud2entities import CloudToBimProcessor
     import open3d as o3d
-    
+
     job_input_dir = get_job_input_dir(job_id)
     job_output_dir = get_job_output_dir(job_id)
-    
+
     point_cloud_filepath = os.path.join(job_input_dir, f"{job_id}_{original_point_cloud_filename}")
 
     jobs[job_id]["status"] = "processing"
@@ -97,45 +109,45 @@ async def process_conversion_job(job_id: str, original_point_cloud_filename: str
         jobs[job_id]["stage"] = "Loading point cloud"
         jobs[job_id]["progress"] = 20
         logger.info(f"Job {job_id}: Loading point cloud from {point_cloud_filepath}.")
-        
+
         # Load point cloud using Open3D
         point_cloud_data = o3d.io.read_point_cloud(point_cloud_filepath)
         if len(point_cloud_data.points) == 0:
             raise ValueError("Point cloud file is empty or could not be read")
-        
+
         logger.info(f"Job {job_id}: Point cloud loaded with {len(point_cloud_data.points)} points.")
 
         # Step 3: Initialize and run CloudToBimProcessor
         jobs[job_id]["stage"] = "Processing point cloud"
         jobs[job_id]["progress"] = 30
-        
+
         # Create processor instance
         processor = CloudToBimProcessor(
             job_id=job_id,
             config_data=config_data,
             output_dir=job_output_dir,
-            point_cloud_data=point_cloud_data
+            point_cloud_data=point_cloud_data,
         )
-        
+
         # Update progress during processing
         def update_progress(stage: str, progress: int):
             jobs[job_id]["stage"] = stage
             jobs[job_id]["progress"] = progress
             logger.info(f"Job {job_id}: {stage} - {progress}%")
-        
+
         # Run the actual processing using the process() method
         update_progress("Processing point cloud", 40)
         processor.process()  # This handles all the steps internally
-        
+
         # Check if the output files were created and copy them to the expected names
         generated_ifc_file = os.path.join(job_output_dir, f"{job_id}_model.ifc")
         expected_ifc_file = os.path.join(job_output_dir, "model.ifc")
-        
+
         generated_mapping_file = os.path.join(job_output_dir, f"{job_id}_point_mapping.json")
         expected_mapping_file = os.path.join(job_output_dir, "point_mapping.json")
-        
+
         update_progress("Finalizing results", 90)
-        
+
         # Copy/rename files to expected names for download endpoints
         if os.path.exists(generated_ifc_file):
             if generated_ifc_file != expected_ifc_file:
@@ -143,14 +155,14 @@ async def process_conversion_job(job_id: str, original_point_cloud_filename: str
             logger.info(f"Job {job_id}: IFC file available at {expected_ifc_file}")
         else:
             raise FileNotFoundError(f"Expected IFC output file not found: {generated_ifc_file}")
-            
+
         if os.path.exists(generated_mapping_file):
             if generated_mapping_file != expected_mapping_file:
                 shutil.copy2(generated_mapping_file, expected_mapping_file)
             logger.info(f"Job {job_id}: Point mapping file available at {expected_mapping_file}")
         else:
             logger.warning(f"Job {job_id}: Point mapping file not found: {generated_mapping_file}")
-        
+
         # Final update
         jobs[job_id]["status"] = "completed"
         jobs[job_id]["stage"] = "Finished"
@@ -158,56 +170,66 @@ async def process_conversion_job(job_id: str, original_point_cloud_filename: str
         jobs[job_id]["message"] = "Conversion successful."
         logger.info(f"Job {job_id}: Processing completed successfully.")
 
-    except ValueError as ve: # Catch specific, known errors first
+    except ValueError as ve:  # Catch specific, known errors first
         logger.error(f"Job {job_id}: Validation error during processing: {ve}")
         jobs[job_id]["status"] = "failed"
-        jobs[job_id]["stage"] = jobs[job_id].get("stage", "Unknown") # Keep last known stage
-        jobs[job_id]["progress"] = jobs[job_id].get("progress", 0) # Keep last known progress on error
+        jobs[job_id]["stage"] = jobs[job_id].get("stage", "Unknown")  # Keep last known stage
+        jobs[job_id]["progress"] = jobs[job_id].get(
+            "progress", 0
+        )  # Keep last known progress on error
         jobs[job_id]["message"] = str(ve)
     except Exception as e:
         logger.error(f"Job {job_id}: Unhandled error during processing: {e}", exc_info=True)
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["stage"] = jobs[job_id].get("stage", "Unknown")
-        jobs[job_id]["progress"] = jobs[job_id].get("progress", 0) # Keep last known progress on error
+        jobs[job_id]["progress"] = jobs[job_id].get(
+            "progress", 0
+        )  # Keep last known progress on error
         jobs[job_id]["message"] = f"An unexpected error occurred: {e}"
+
 
 # --- API Endpoints ---
 
-@app.post("/convert", response_model=Job, status_code=202) # Set status_code to 202 Accepted
+
+@app.post("/convert", response_model=Job, status_code=202)  # Set status_code to 202 Accepted
 async def create_conversion_job(
     background_tasks: BackgroundTasks,
-    point_cloud_file: UploadFile = File(..., description="Point cloud file (PLY, PTX, or XYZ format)"),
-    config_file: UploadFile = File(..., description="YAML configuration file")
+    point_cloud_file: UploadFile = File(
+        ..., description="Point cloud file (PLY, PTX, or XYZ format)"
+    ),
+    config_file: UploadFile = File(..., description="YAML configuration file"),
 ):
     """
     Accepts a point cloud file (PTX/XYZ/PLY) and a YAML configuration file,
-    stores them for the job, starts an asynchronous conversion job, 
+    stores them for the job, starts an asynchronous conversion job,
     and returns a job ID with status 202 (Accepted).
     """
     job_id = str(uuid.uuid4())
-    
+
     # Validate file extensions
     if not validate_file_format(point_cloud_file.filename):
         supported_formats_str = ", ".join(SUPPORTED_FORMATS)
         raise HTTPException(
-            status_code=400, 
-            detail=f"Unsupported file format. Supported formats are: {supported_formats_str}"
+            status_code=400,
+            detail=f"Unsupported file format. Supported formats are: {supported_formats_str}",
         )
 
-    if not config_file.filename.lower().endswith(('.yaml', '.yml')):
-        raise HTTPException(status_code=400, detail="Invalid configuration file type. Must be .yaml or .yml")
+    if not config_file.filename.lower().endswith((".yaml", ".yml")):
+        raise HTTPException(
+            status_code=400, detail="Invalid configuration file type. Must be .yaml or .yml"
+        )
 
     # Create job-specific directories
     job_input_dir = get_job_input_dir(job_id)
     job_output_dir = get_job_output_dir(job_id)
     os.makedirs(job_input_dir, exist_ok=True)
     os.makedirs(job_output_dir, exist_ok=True)
-    
+
     # Use a secure filename based on job_id and original extension, or just job_id + extension
     # For simplicity, we'll use the original filename prefixed with job_id,
     # but ensure it's sanitized if used directly in paths further.
     # The `save_upload_file` function handles the actual saving.
-    
+
     # Sanitize filenames (basic example, consider more robust sanitization)
     safe_point_cloud_filename = f"{job_id}_{os.path.basename(point_cloud_file.filename)}"
     # Config file is read into memory, so its disk name is less critical here if not saved long-term
@@ -220,10 +242,10 @@ async def create_conversion_job(
         # Save uploaded files
         save_upload_file(point_cloud_file, point_cloud_filepath)
         logger.info(f"Job {job_id}: Saved point cloud file to {point_cloud_filepath}")
-        
+
         # Read config file content
         config_content = await config_file.read()
-        config_content_str = config_content.decode('utf-8')
+        config_content_str = config_content.decode("utf-8")
         logger.info(f"Job {job_id}: Read configuration file {config_file.filename}")
 
     except Exception as e:
@@ -235,22 +257,28 @@ async def create_conversion_job(
 
     # Initialize job status
     jobs[job_id] = {
-        "status": "pending", # As per todo.md, initial status
+        "status": "pending",  # As per todo.md, initial status
         "stage": "Queued",
-        "progress": 0, # Initial progress
+        "progress": 0,  # Initial progress
         "message": "Job received and queued for processing.",
-        "point_cloud_file_path": point_cloud_filepath, # Store the actual path to the saved PTX
-        "original_point_cloud_filename": os.path.basename(point_cloud_file.filename), # Store original for reference
+        "point_cloud_file_path": point_cloud_filepath,  # Store the actual path to the saved PTX
+        "original_point_cloud_filename": os.path.basename(
+            point_cloud_file.filename
+        ),  # Store original for reference
         # "config_content": config_content_str # Already stored
     }
     # Add config_content_str to the job entry if it's not already implicitly handled
     # by being passed to process_conversion_job. Let's ensure it's in `jobs[job_id]`.
     jobs[job_id]["config_content"] = config_content_str
 
-
     # Add the processing to background tasks
     # Pass the original filename to be used by process_conversion_job if needed for output naming
-    background_tasks.add_task(process_conversion_job, job_id, os.path.basename(point_cloud_file.filename), config_content_str)
+    background_tasks.add_task(
+        process_conversion_job,
+        job_id,
+        os.path.basename(point_cloud_file.filename),
+        config_content_str,
+    )
 
     # Return 202 Accepted status code as per todo.md
     # The response_model will still be Job, but FastAPI handles the status code.
@@ -265,11 +293,11 @@ async def create_conversion_job(
     # Let's stick to response_model=Job for now and address 202 specifically if it becomes a hard requirement.
 
     return Job(
-        job_id=job_id, 
-        status=jobs[job_id]["status"], 
+        job_id=job_id,
+        status=jobs[job_id]["status"],
         message=jobs[job_id]["message"],
         stage=jobs[job_id]["stage"],
-        progress=jobs[job_id]["progress"] # Return initial progress
+        progress=jobs[job_id]["progress"],  # Return initial progress
     )
 
 
@@ -281,18 +309,19 @@ async def get_job_status(job_id: str):
     job_info = jobs.get(job_id)
     if not job_info:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     return Job(
         job_id=job_id,
         status=job_info["status"],
         message=job_info.get("message"),
         result_url=job_info.get("result_url"),
         stage=job_info.get("stage"),
-        progress=job_info.get("progress") # Include progress
+        progress=job_info.get("progress"),  # Include progress
     )
 
-@app.get("/results/{job_id}/model.ifc") # Updated path as per todo.md
-async def download_ifc_file(job_id: str): # Parameter is job_id now
+
+@app.get("/results/{job_id}/model.ifc")  # Updated path as per todo.md
+async def download_ifc_file(job_id: str):  # Parameter is job_id now
     """
     Downloads the resulting IFC model file for a completed job.
     """
@@ -301,18 +330,29 @@ async def download_ifc_file(job_id: str): # Parameter is job_id now
         raise HTTPException(status_code=404, detail="Job not found")
 
     if job_info.get("status") != "completed":
-        raise HTTPException(status_code=400, detail=f"Job {job_id} is not completed. Status: {job_info.get('status')}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job {job_id} is not completed. Status: {job_info.get('status')}",
+        )
 
     output_dir = get_job_output_dir(job_id)
     # Filename is fixed as "model.ifc" according to todo.md for this endpoint
-    filename = "model.ifc" 
+    filename = "model.ifc"
     filepath = os.path.join(output_dir, filename)
 
     if not os.path.exists(filepath):
-        logger.error(f"Result file {filepath} not found for job {job_id}, though job is marked completed.")
-        raise HTTPException(status_code=404, detail=f"Result file not found for job {job_id}. Please check job status or contact support.")
-    
-    return FileResponse(path=filepath, filename=filename, media_type='application/vnd.ifc') # Corrected media type
+        logger.error(
+            f"Result file {filepath} not found for job {job_id}, though job is marked completed."
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=f"Result file not found for job {job_id}. Please check job status or contact support.",
+        )
+
+    return FileResponse(
+        path=filepath, filename=filename, media_type="application/vnd.ifc"
+    )  # Corrected media type
+
 
 # Placeholder for /results/{job_id}/point_mapping.json (Task 3.4)
 @app.get("/results/{job_id}/point_mapping.json")
@@ -322,21 +362,28 @@ async def download_point_mapping_file(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
 
     if job_info.get("status") != "completed":
-        raise HTTPException(status_code=400, detail=f"Job {job_id} is not completed. Status: {job_info.get('status')}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job {job_id} is not completed. Status: {job_info.get('status')}",
+        )
 
     output_dir = get_job_output_dir(job_id)
-    filename = "point_mapping.json" # As per todo.md
+    filename = "point_mapping.json"  # As per todo.md
     filepath = os.path.join(output_dir, filename)
 
     if not os.path.exists(filepath):
         # If the job is complete but file doesn't exist, this is an issue.
         logger.error(f"Point mapping file {filepath} not found for completed job {job_id}.")
-        raise HTTPException(status_code=404, detail=f"Point mapping file not found for job {job_id}. The job may have failed to produce this output.")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Point mapping file not found for job {job_id}. The job may have failed to produce this output.",
+        )
 
-    return FileResponse(path=filepath, filename=filename, media_type='application/json')
+    return FileResponse(path=filepath, filename=filename, media_type="application/json")
 
 
 if __name__ == "__main__":
     import uvicorn
+
     # This is for local development. For production, use a proper ASGI server like Gunicorn with Uvicorn workers.
     uvicorn.run(app, host="0.0.0.0", port=8001)

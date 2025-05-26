@@ -7,6 +7,7 @@ from datetime import datetime
 from itertools import islice
 
 from matplotlib.patches import Polygon
+import matplotlib.pyplot as plt
 
 import yaml
 import cv2
@@ -17,14 +18,24 @@ from skimage.morphology import closing, rectangle
 import open3d as o3d
 import e57
 from tqdm import tqdm
-#from .plotting_functions import *
-import logging # Add logging import
 
-logger_aux = logging.getLogger(__name__) # Create a logger instance
+# Import plotting functions
+from .plotting_functions import (
+    plot_2d_histogram,
+    plot_shifted_mask,
+    plot_smoothed_contour,
+    plot_histogram_with_threshold,
+)
+
+# from .plotting_functions import *
+import logging  # Add logging import
+
+logger_aux = logging.getLogger(__name__)  # Create a logger instance
+
 
 def load_config_and_variables_new(config_path: str | None = None):  # Added config_path parameter
     """Load YAML config, validate required keys, and return configuration variables."""
-    
+
     effective_config_path = config_path
     logger_aux.info(f"load_config_and_variables called with config_path: {config_path}")
 
@@ -34,54 +45,67 @@ def load_config_and_variables_new(config_path: str | None = None):  # Added conf
         default_server_config_path = os.path.join(app_config_dir, "config.yaml")
         if os.path.isfile(default_server_config_path):
             effective_config_path = default_server_config_path
-            logger_aux.info(f"No explicit config_path, using default server config: {effective_config_path}")
+            logger_aux.info(
+                f"No explicit config_path, using default server config: {effective_config_path}"
+            )
         else:
-            logger_aux.error("No explicit config_path provided and default server config not found.")
-            return None # Critical failure if no path can be determined
+            logger_aux.error(
+                "No explicit config_path provided and default server config not found."
+            )
+            return None  # Critical failure if no path can be determined
 
     logger_aux.info(f"Attempting to load configuration from: {effective_config_path}")
 
     if not os.path.isfile(effective_config_path):
-        logger_aux.error(f"Configuration file '{effective_config_path}' does not exist. Cannot load config.")
+        logger_aux.error(
+            f"Configuration file '{effective_config_path}' does not exist. Cannot load config."
+        )
         return None  # Indicate failure to load
 
     try:
-        with open(effective_config_path, 'r') as file:
+        with open(effective_config_path, "r") as file:
             config = yaml.safe_load(file)
     except yaml.YAMLError as e:
         logger_aux.error(f"Error parsing YAML file {effective_config_path}: {e}")
-        return None # Indicate failure to parse
+        return None  # Indicate failure to parse
     except Exception as e:
         logger_aux.error(f"Unexpected error loading/parsing YAML file {effective_config_path}: {e}")
         return None
 
     if not isinstance(config, dict):
-        logger_aux.error(f"Configuration file '{effective_config_path}' did not load as a dictionary.")
+        logger_aux.error(
+            f"Configuration file '{effective_config_path}' did not load as a dictionary."
+        )
         return None
 
     # Validate required keys (example)
     # required_keys = [
-    #     "project_settings", "point_cloud_processing", "ifc_settings", 
+    #     "project_settings", "point_cloud_processing", "ifc_settings",
     #     "slab_detection", "wall_detection", "opening_detection"
     # ]
     # Updated required_keys based on tests/data/sample_config.yaml
     # We now have a more flexible approach to configuration
     # Minimal required sections
     required_keys = [
-        #"detection"  # Only require detection section as minimum
+        # "detection"  # Only require detection section as minimum
     ]
 
     missing_keys = [key for key in required_keys if key not in config]
     if missing_keys:
         for key in missing_keys:
-            logger_aux.error(f"Missing required config key: '{key}' in '{effective_config_path}'.")
-        logger_aux.error(f"Missing required keys in '{effective_config_path}'. Cannot proceed with this configuration.")
-        return None # Indicate failure due to missing keys
-        
+            logger_aux.error(
+                f"Missing required config key: '{key}' in '{effective_config_path}'."
+            )
+        logger_aux.error(
+            f"Missing required keys in '{effective_config_path}'. "
+            f"Cannot proceed with this configuration."
+        )
+        return None  # Indicate failure due to missing keys
+
     # Ensure minimum structure exists
     if "preprocessing" not in config:
         config["preprocessing"] = {"voxel_size": 0.05, "noise_threshold": 0.02}
-        
+
     if "ifc" not in config:
         config["ifc"] = {"project_name": "Cloud2BIM Project"}
 
@@ -90,7 +114,9 @@ def load_config_and_variables_new(config_path: str | None = None):  # Added conf
     # Downstream functions (cloud2entities, generate_ifc) will need to be adapted
     # to use this nested structure (e.g., config_params["preprocessing"]["voxel_size"])
 
-    logger_aux.info(f"Successfully loaded and validated configuration from {effective_config_path}")
+    logger_aux.info(
+        f"Successfully loaded and validated configuration from {effective_config_path}"
+    )
     return config
 
     # Old 'variables' dictionary creation - removed for now as it's incompatible with sample_config.yaml
@@ -126,7 +152,10 @@ def load_config_and_variables_new(config_path: str | None = None):  # Added conf
 
     # if config["e57_input"]:
     #     if "e57_files" not in config:
-    #         logger_aux.error(f"Missing required config key: 'e57_files' when 'e57_input' is true in '{effective_config_path}'.")
+    #         logger_aux.error(
+    #             f"Missing required config key: 'e57_files' when 'e57_input' is true "
+    #             f"in '{effective_config_path}'."
+    #         )
     #         return None # Indicate failure
     #     variables["e57_file_names"] = config["e57_files"]
 
@@ -134,11 +163,17 @@ def load_config_and_variables_new(config_path: str | None = None):  # Added conf
 
 
 def load_config_and_variables():
-    """Load YAML config passed as CLI argument, validate required keys, and return configuration variables."""
+    """
+    Load YAML config passed as CLI argument, validate required keys,
+    and return configuration variables.
+    """
     if len(sys.argv) < 2:
         # Default fallback path for development
         config_path = "config.yaml"  # nebo celá cesta
-        print("[INFO] No argument provided, using input configuration file in directory of project:", config_path)
+        print(
+            "[INFO] No argument provided, using input configuration file in directory of project:",
+            config_path,
+        )
     else:
         config_path = sys.argv[1]
 
@@ -146,7 +181,7 @@ def load_config_and_variables():
         sys.exit(f"[ERROR] File '{config_path}' does not exist.")
 
     try:
-        with open(config_path, 'r') as file:
+        with open(config_path, "r") as file:
             config = yaml.safe_load(file)
     except yaml.YAMLError as e:
         sys.exit(f"[ERROR] Invalid YAML format in '{config_path}': {e}")
@@ -154,15 +189,33 @@ def load_config_and_variables():
         sys.exit(f"[ERROR] Failed to load configuration file: {e}")
 
     required_keys = [
-        "e57_input", "xyz_files", "exterior_scan",
-        "dilute", "dilution_factor", "pc_resolution", "grid_coefficient",
-        "bfs_thickness", "tfs_thickness",
-        "min_wall_length", "min_wall_thickness", "max_wall_thickness", "exterior_walls_thickness",
-        "output_ifc", "ifc_project_name", "ifc_project_long_name", "ifc_project_version",
-        "ifc_author_name", "ifc_author_surname", "ifc_author_organization",
-        "ifc_building_name", "ifc_building_type", "ifc_building_phase",
-        "ifc_site_latitude", "ifc_site_longitude", "ifc_site_elevation",
-        "material_for_objects"
+        "e57_input",
+        "xyz_files",
+        "exterior_scan",
+        "dilute",
+        "dilution_factor",
+        "pc_resolution",
+        "grid_coefficient",
+        "bfs_thickness",
+        "tfs_thickness",
+        "min_wall_length",
+        "min_wall_thickness",
+        "max_wall_thickness",
+        "exterior_walls_thickness",
+        "output_ifc",
+        "ifc_project_name",
+        "ifc_project_long_name",
+        "ifc_project_version",
+        "ifc_author_name",
+        "ifc_author_surname",
+        "ifc_author_organization",
+        "ifc_building_name",
+        "ifc_building_type",
+        "ifc_building_phase",
+        "ifc_site_latitude",
+        "ifc_site_longitude",
+        "ifc_site_elevation",
+        "material_for_objects",
     ]
 
     if config.get("e57_input"):
@@ -201,7 +254,7 @@ def load_config_and_variables():
         "ifc_site_latitude": tuple(config["ifc_site_latitude"]),
         "ifc_site_longitude": tuple(config["ifc_site_longitude"]),
         "ifc_site_elevation": config["ifc_site_elevation"],
-        "material_for_objects": config["material_for_objects"]
+        "material_for_objects": config["material_for_objects"],
     }
 
     if config["e57_input"]:
@@ -209,12 +262,13 @@ def load_config_and_variables():
 
     return variables
 
+
 def log(message, last_time, filename):
     current_time = time.time()
     timestamp = datetime.now().strftime("%Y-%m-%d, %H:%M:%S")
     elapsed_time = current_time - last_time
     log_message = f"{timestamp} - {message} Elapsed time: {elapsed_time:.2f} s."
-    with open(filename, 'a') as f:
+    with open(filename, "a") as f:
         f.write(log_message)
     print(log_message)
     return current_time
@@ -246,15 +300,17 @@ def e57_data_to_xyz(e57_data, output_file_name, chunk_size=10000):
         blue = colors[:, 2][start:end]
         intensity = intensities[:, 0][start:end]
 
-        df = pd.DataFrame({'X': x, 'Y': y, 'Z': z, 'R': red, 'G': green, 'B': blue, 'Intensity': intensity})
+        df = pd.DataFrame(
+            {"X": x, "Y": y, "Z": z, "R": red, "G": green, "B": blue, "Intensity": intensity}
+        )
         # Round the DataFrame entries to 3 decimal places
         df = df.round(3)
 
         # Check if file exists and is not empty
         if os.path.exists(output_file_name) and os.path.getsize(output_file_name) > 0:
-            df.to_csv(output_file_name, sep='\t', index=False, header=False, mode='a')
+            df.to_csv(output_file_name, sep="\t", index=False, header=False, mode="a")
         else:
-            df.to_csv(output_file_name, sep='\t', index=False, header=True, mode='a')
+            df.to_csv(output_file_name, sep="\t", index=False, header=True, mode="a")
 
 
 def save_xyz(points, output_file_name):
@@ -262,16 +318,16 @@ def save_xyz(points, output_file_name):
     y = points[:, 1]
     z = points[:, 2]
     # df = pd.DataFrame({'//X': x, 'Y': y, 'Z': z, 'R': red, 'G': green, 'B': blue, 'Intensity': intensity})
-    df = pd.DataFrame({'//X': x, 'Y': y, 'Z': z})
-    df.to_csv(output_file_name, sep='\t', index=False)
-    print('Points saved as %s' % output_file_name)
+    df = pd.DataFrame({"//X": x, "Y": y, "Z": z})
+    df.to_csv(output_file_name, sep="\t", index=False)
+    print("Points saved as %s" % output_file_name)
 
 
 def load_selective_lines(filename, step):
-    with open(filename, 'r') as file:
+    with open(filename, "r") as file:
         # Skip the first line
         next(file)
-        lines = (line.strip().split('\t') for line in islice(file, 0, None, step))
+        lines = (line.strip().split("\t") for line in islice(file, 0, None, step))
         return [[float(element) for element in line] for line in lines]
 
 
@@ -284,15 +340,15 @@ def load_xyz_file(file_name, plot_xyz=False, select_ith_lines=True, ith_lines=20
         pcd = np.loadtxt(file_name, skiprows=1)
         xyz = pcd[:, :3]
         rgb = pcd[:, 3:6]
-    print('Point cloud consisting of %d points loaded.' % len(xyz))
+    print("Point cloud consisting of %d points loaded." % len(xyz))
 
     # show plot of xyz points from top view: (x, y) coordinates and with rgb-colored points
     if plot_xyz:
         plt.figure(figsize=(8, 5), dpi=150)
         plt.scatter(xyz[:, 0], xyz[:, 1], c=rgb / 255, s=0.05)
         plt.title("Top-View")
-        plt.xlabel('X-axis (m)')
-        plt.ylabel('Y-axis (m)')
+        plt.xlabel("X-axis (m)")
+        plt.ylabel("Y-axis (m)")
         plt.show()
     return xyz, rgb
 
@@ -320,8 +376,14 @@ def smooth_contour(x_contour, y_contour, epsilon):
     return x_smoothed, y_smoothed, simplified_points
 
 
-def create_hull_from_histogram(points_3d, pointcloud_resolution, grid_coefficient, plot_graphics,
-                               dilation_meters, erosion_meters):
+def create_hull_from_histogram(
+    points_3d,
+    pointcloud_resolution,
+    grid_coefficient,
+    plot_graphics,
+    dilation_meters,
+    erosion_meters,
+):
     # Project 3D points to 2D
     points_2d = np.array([[x, y] for x, y, _ in points_3d])
 
@@ -365,30 +427,42 @@ def create_hull_from_histogram(points_3d, pointcloud_resolution, grid_coefficien
     # Adjust contour scaling
     contour = np.squeeze(largest_contour, axis=1)  # Remove redundant dimension
     # Adjusting scaling to fully cover the bin extents
-    contour_scaled = (contour + 0.5) * pixel_size + [x_min_extended,
-                                                     y_min_extended]  # Add 0.5 to shift to the center of the bin
+    contour_scaled = (contour + 0.5) * pixel_size + [
+        x_min_extended,
+        y_min_extended,
+    ]  # Add 0.5 to shift to the center of the bin
     # Adjusting scaling to the original domain
-    polygon = Polygon(contour_scaled, fill=None, edgecolor='blue')
+    polygon = Polygon(contour_scaled, fill=None, edgecolor="blue")
     x_contour = contour_scaled[:, 0].flatten()
     y_contour = contour_scaled[:, 1].flatten()
 
     # Smooth the contour
     smoothing_factor = 0.0005
-    x_contour_smoothed, y_contour_smoothed, simplified_points = smooth_contour(x_contour, y_contour,
-                                                                               epsilon=smoothing_factor)
-    polygon_smoothed = Polygon(simplified_points, fill=None, edgecolor='red')
+    x_contour_smoothed, y_contour_smoothed, simplified_points = smooth_contour(
+        x_contour, y_contour, epsilon=smoothing_factor
+    )
+    polygon_smoothed = Polygon(simplified_points, fill=None, edgecolor="red")
     if plot_graphics:
         plot_smoothed_contour(polygon, polygon_smoothed)
 
     return x_contour_smoothed, y_contour_smoothed, polygon_smoothed
 
 
-def identify_slabs(points_xyz, points_rgb, bottom_floor_slab_thickness, top_floor_ceiling_thickness,
-                   z_step, pc_resolution, plot_segmented_plane=False):
+def identify_slabs(
+    points_xyz,
+    points_rgb,
+    bottom_floor_slab_thickness,
+    top_floor_ceiling_thickness,
+    z_step,
+    pc_resolution,
+    plot_segmented_plane=False,
+):
     z_min, z_max = min(points_xyz[:, 2]), max(points_xyz[:, 2])
     n_steps = int((z_max - z_min) / z_step + 1)
     z_array, n_points_array = [], []
-    for i in tqdm(range(n_steps), desc="Progress searching for horiz_surface candidate z-coordinates"):
+    for i in tqdm(
+        range(n_steps), desc="Progress searching for horiz_surface candidate z-coordinates"
+    ):
         z = z_min + i * z_step
         idx_selected_xyz = np.where((z < points_xyz[:, 2]) & (points_xyz[:, 2] < (z + z_step)))[0]
         z_array.append(z)
@@ -399,10 +473,15 @@ def identify_slabs(points_xyz, points_rgb, bottom_floor_slab_thickness, top_floo
 
     # Histogram plotting
     if plot_segmented_plane:
-        plt.plot(np.array(n_points_array) / 1000, z_array, '-r', linewidth=0.8)
-        plt.plot([max_n_points_array / 1000, max_n_points_array / 1000], [min(z_array), max(z_array)], '--b', linewidth=1.0)
-        plt.ylabel(r'Height/z-coordinate (m)')
-        plt.xlabel(r'Number of points ($\times 10^3$)')
+        plt.plot(np.array(n_points_array) / 1000, z_array, "-r", linewidth=0.8)
+        plt.plot(
+            [max_n_points_array / 1000, max_n_points_array / 1000],
+            [min(z_array), max(z_array)],
+            "--b",
+            linewidth=1.0,
+        )
+        plt.ylabel(r"Height/z-coordinate (m)")
+        plt.xlabel(r"Number of points ($\times 10^3$)")
         plt.show()
 
     # extract z-coordinates where the density of points (indicated by a high value on the histogram) exceeds 50%
@@ -427,17 +506,25 @@ def identify_slabs(points_xyz, points_rgb, bottom_floor_slab_thickness, top_floo
         else:
             merged_candidates[-1][1] = interval[1]
 
-    horiz_surface_planes, horiz_surface_colors, horiz_surface_polygon, horiz_surface_polygon_x, \
-        horiz_surface_polygon_y, horiz_surface_z, horiz_surface_thickness = [], [], [], [], [], [], []
+    (
+        horiz_surface_planes,
+        _,  # horiz_surface_colors - unused
+        _,  # horiz_surface_polygon - unused
+        _,  # horiz_surface_polygon_x - unused
+        _,  # horiz_surface_polygon_y - unused
+        _,  # horiz_surface_z - unused
+        _,  # horiz_surface_thickness - unused
+    ) = ([], [], [], [], [], [], [])
 
     # extract xyz points within an interval given by horiz_surface_candidates (lie within the range given by the
     # z-coordinates in horiz_surface candidates)
     for i in tqdm(range(len(h_surf_candidates)), desc="Extracting points for horizontal surfaces"):
         horiz_surface_idx = np.where(
-            (h_surf_candidates[i][0] < points_xyz[:, 2]) &
-            (points_xyz[:, 2] < h_surf_candidates[i][1]))[0]
+            (h_surf_candidates[i][0] < points_xyz[:, 2])
+            & (points_xyz[:, 2] < h_surf_candidates[i][1])
+        )[0]
         horiz_surface_planes.append(points_xyz[horiz_surface_idx])
-        #horiz_surface_colors.append(points_rgb[horiz_surface_idx] / 255)
+        # horiz_surface_colors.append(points_rgb[horiz_surface_idx] / 255)
 
     # plot_horizontal_surfaces(horiz_surface_planes)
 
@@ -445,53 +532,111 @@ def identify_slabs(points_xyz, points_rgb, bottom_floor_slab_thickness, top_floo
     slabs = []
     for i in range(len(h_surf_candidates)):
         if i == 0:
-            print('Creating hull for slab no. %d of %d.' % ((i + 1), int(len(h_surf_candidates) / 2) + 1))
+            print(
+                "Creating hull for slab no. %d of %d."
+                % ((i + 1), int(len(h_surf_candidates) / 2) + 1)
+            )
             slab_top_z_coord = np.median(horiz_surface_planes[i][:, 2])
             slab_bottom_z_coord = slab_top_z_coord - bottom_floor_slab_thickness
-            x_coords, y_coords, polygon = create_hull_from_histogram(horiz_surface_planes[i], pc_resolution,
-                                                                     grid_coefficient=5, plot_graphics=False,
-                                                                     dilation_meters=1.0, erosion_meters=1.0)
-            slabs.append({'polygon': polygon, 'polygon_x_coords': x_coords, 'polygon_y_coords': y_coords,
-                          'slab_bottom_z_coord': slab_bottom_z_coord, 'thickness': bottom_floor_slab_thickness})
-            print('Slab no. %d: bottom (z-coordinate) = %.3f m, thickness = %0.1f mm'
-                  % ((i + 1) / 2, slab_bottom_z_coord, bottom_floor_slab_thickness * 1000))
+            x_coords, y_coords, polygon = create_hull_from_histogram(
+                horiz_surface_planes[i],
+                pc_resolution,
+                grid_coefficient=5,
+                plot_graphics=False,
+                dilation_meters=1.0,
+                erosion_meters=1.0,
+            )
+            slabs.append(
+                {
+                    "polygon": polygon,
+                    "polygon_x_coords": x_coords,
+                    "polygon_y_coords": y_coords,
+                    "slab_bottom_z_coord": slab_bottom_z_coord,
+                    "thickness": bottom_floor_slab_thickness,
+                }
+            )
+            print(
+                "Slab no. %d: bottom (z-coordinate) = %.3f m, thickness = %0.1f mm"
+                % ((i + 1) / 2, slab_bottom_z_coord, bottom_floor_slab_thickness * 1000)
+            )
 
         elif (i % 2) == 0:
-            print('Creating hull for slab no. %d of %d.' % ((i + 1) / 2, int(len(h_surf_candidates) / 2) + 1))
+            print(
+                "Creating hull for slab no. %d of %d."
+                % ((i + 1) / 2, int(len(h_surf_candidates) / 2) + 1)
+            )
             slab_bottom_z_coord = np.median(horiz_surface_planes[i - 1][:, 2])
             slab_top_z_coord = np.median(horiz_surface_planes[i][:, 2])
             slab_thickness = slab_top_z_coord - slab_bottom_z_coord
-            slab_points = np.concatenate((horiz_surface_planes[i - 1], horiz_surface_planes[i]), axis=0)
+            slab_points = np.concatenate(
+                (horiz_surface_planes[i - 1], horiz_surface_planes[i]), axis=0
+            )
 
             # create hull for the slab
-            x_coords, y_coords, polygon = create_hull_from_histogram(slab_points, pc_resolution,
-                                                                     grid_coefficient=5, plot_graphics=False,
-                                                                     dilation_meters=1.5, erosion_meters=1.5)
-            slabs.append({'polygon': polygon, 'polygon_x_coords': x_coords, 'polygon_y_coords': y_coords,
-                          'slab_bottom_z_coord': slab_bottom_z_coord, 'thickness': slab_thickness})
-            print('Slab no. %d: bottom (z-coordinate) = %.3f m, thickness = %0.1f mm'
-                  % ((i + 1) / 2, slab_bottom_z_coord, slab_thickness * 1000))
+            x_coords, y_coords, polygon = create_hull_from_histogram(
+                slab_points,
+                pc_resolution,
+                grid_coefficient=5,
+                plot_graphics=False,
+                dilation_meters=1.5,
+                erosion_meters=1.5,
+            )
+            slabs.append(
+                {
+                    "polygon": polygon,
+                    "polygon_x_coords": x_coords,
+                    "polygon_y_coords": y_coords,
+                    "slab_bottom_z_coord": slab_bottom_z_coord,
+                    "thickness": slab_thickness,
+                }
+            )
+            print(
+                "Slab no. %d: bottom (z-coordinate) = %.3f m, thickness = %0.1f mm"
+                % ((i + 1) / 2, slab_bottom_z_coord, slab_thickness * 1000)
+            )
 
         elif (i % 2) == 1 and i == len(h_surf_candidates) - 1:
-            print('Creating hull for slab no. %d of %d.' % ((i + 1) / 2, int(len(h_surf_candidates) / 2) + 1))
+            print(
+                "Creating hull for slab no. %d of %d."
+                % ((i + 1) / 2, int(len(h_surf_candidates) / 2) + 1)
+            )
             slab_bottom_z_coord = np.median(horiz_surface_planes[i][:, 2])
 
             # create hull for the slab
-            x_coords, y_coords, polygon = create_hull_from_histogram(horiz_surface_planes[i], pc_resolution,
-                                                                     grid_coefficient=5, plot_graphics=False,
-                                                                     dilation_meters=1.5, erosion_meters=1.5)
-            slabs.append({'polygon': polygon, 'polygon_x_coords': x_coords, 'polygon_y_coords': y_coords,
-                          'slab_bottom_z_coord': slab_bottom_z_coord, 'thickness': top_floor_ceiling_thickness})
-            print('Slab no. %d: bottom (z-coordinate) = %.3f m, thickness = %0.1f mm'
-                  % ((i + 1) / 2, slab_bottom_z_coord, top_floor_ceiling_thickness * 1000))
+            x_coords, y_coords, polygon = create_hull_from_histogram(
+                horiz_surface_planes[i],
+                pc_resolution,
+                grid_coefficient=5,
+                plot_graphics=False,
+                dilation_meters=1.5,
+                erosion_meters=1.5,
+            )
+            slabs.append(
+                {
+                    "polygon": polygon,
+                    "polygon_x_coords": x_coords,
+                    "polygon_y_coords": y_coords,
+                    "slab_bottom_z_coord": slab_bottom_z_coord,
+                    "thickness": top_floor_ceiling_thickness,
+                }
+            )
+            print(
+                "Slab no. %d: bottom (z-coordinate) = %.3f m, thickness = %0.1f mm"
+                % ((i + 1) / 2, slab_bottom_z_coord, top_floor_ceiling_thickness * 1000)
+            )
 
-        save_xyz(horiz_surface_planes[i], '/home/fothar/Cloud2BIM_web/tests/data/output_xyz/horiz_surface_%d.xyz' % (i + 1))
+        save_xyz(
+            horiz_surface_planes[i],
+            "/home/fothar/Cloud2BIM_web/tests/data/output_xyz/horiz_surface_%d.xyz" % (i + 1),
+        )
 
     # plot the segmented plane
     pcd = []
     if plot_segmented_plane:
         for i in range(len(horiz_surface_planes)):
-            pcd.append(o3d.io.read_point_cloud('output_xyz/horiz_surface_%d.xyz' % (i + 1), format='xyz'))
+            pcd.append(
+                o3d.io.read_point_cloud("output_xyz/horiz_surface_%d.xyz" % (i + 1), format="xyz")
+            )
         o3d.visualization.draw_geometries(pcd)
 
     return slabs, horiz_surface_planes
@@ -503,13 +648,17 @@ def split_pointcloud_to_storeys(points_xyz, slabs):
     # Iterate through the slabs and get the regions between consecutive slabs
     safety_margin = 0.1  # safety margin for the point cloud splitting into storeys
     for i in range(len(slabs) - 1):
-        bottom_z_of_upper_slab = slabs[i + 1]['slab_bottom_z_coord'] + safety_margin  # upper limit (+ 10 cm of the ceiling slab)
-        top_z_of_bottom_slab = slabs[i]['slab_bottom_z_coord'] + slabs[i][
-            'thickness'] - safety_margin  # bottom limit (- 10 cm of the floor)
+        bottom_z_of_upper_slab = (
+            slabs[i + 1]["slab_bottom_z_coord"] + safety_margin
+        )  # upper limit (+ 10 cm of the ceiling slab)
+        top_z_of_bottom_slab = (
+            slabs[i]["slab_bottom_z_coord"] + slabs[i]["thickness"] - safety_margin
+        )  # bottom limit (- 10 cm of the floor)
 
         # Extract points that are between the bottom of the upper slab and the top of the lower slab
-        segmented_pointcloud_idx = np.where((top_z_of_bottom_slab < points_xyz[:, 2]) &
-                                            (points_xyz[:, 2] < bottom_z_of_upper_slab))[0]
+        segmented_pointcloud_idx = np.where(
+            (top_z_of_bottom_slab < points_xyz[:, 2]) & (points_xyz[:, 2] < bottom_z_of_upper_slab)
+        )[0]
 
         if len(segmented_pointcloud_idx) > 0:
             segmented_pointcloud_points_in_storey = points_xyz[segmented_pointcloud_idx]
@@ -554,18 +703,18 @@ def display_cross_section_plot(segmented_pointclouds_3d, slabs):
 
         # Plot lines representing slab limits
         slab = slabs[i]
-        bottom_z = slab['slab_bottom_z_coord']
-        top_z = bottom_z + slab['thickness']
+        bottom_z = slab["slab_bottom_z_coord"]
+        top_z = bottom_z + slab["thickness"]
         min_x = np.min(pointcloud[:, 0])
         max_x = np.max(pointcloud[:, 0])
-        plt.plot([min_x - 1, max_x + 1], [bottom_z, bottom_z], 'r--')
-        plt.plot([min_x - 1, max_x + 1], [top_z, top_z], 'b--')
+        plt.plot([min_x - 1, max_x + 1], [bottom_z, bottom_z], "r--")
+        plt.plot([min_x - 1, max_x + 1], [top_z, top_z], "b--")
 
-    plt.xlabel('X-coordinate (m)')
-    plt.ylabel('Z-coordinate (m)')
-    plt.legend('Cross Section')
+    plt.xlabel("X-coordinate (m)")
+    plt.ylabel("Z-coordinate (m)")
+    plt.legend("Cross Section")
     plt.grid(False)
-    plt.axis('equal')
+    plt.axis("equal")
     plt.show()
 
 
@@ -576,14 +725,15 @@ def save_coordinates_to_xyz(coordinates_list, base_filename):
         z_coordinates = coordinates[:, 2]
 
     # Construct the filename with a numerical suffix
-    filename = f'{base_filename}_{i}.xyz'
+    filename = f"{base_filename}_{i}.xyz"
 
     # Combine X, Y, and Z coordinates and save to the XYZ file
     combined_coordinates = np.column_stack((x_coordinates, y_coordinates, z_coordinates))
-    np.savetxt(filename, combined_coordinates, delimiter=' ', fmt='%.4f')
+    np.savetxt(filename, combined_coordinates, delimiter=" ", fmt="%.4f")
 
 
 # Functions used for identification of walls
+
 
 # Define a function to get line segments from a contour using Douglas-Peuckert algorithm
 def get_line_segments(contour, pixel_size, segment_approximation_tolerance=0.02):
@@ -658,7 +808,9 @@ def distance_points_to_line_np(points, line_start, line_end):
 
     distances_to_start = np.linalg.norm(points - line_start, axis=1)
     distances_to_end = np.linalg.norm(points - line_end, axis=1)
-    distances = np.where(on_segment, perpendicular_distances, np.minimum(distances_to_start, distances_to_end))
+    distances = np.where(
+        on_segment, perpendicular_distances, np.minimum(distances_to_start, distances_to_end)
+    )
 
     return distances
 
@@ -722,8 +874,9 @@ def merge_collinear_segments(segments, min_thickness, max_distance):
         to_merge = [base_segment]
 
         for other_segment in segments[1:]:
-            if (segments_collinearity_check(base_segment, other_segment, min_thickness, max_distance)
-                    and segments_angle(base_segment, other_segment, angle_tolerance=3)):
+            if segments_collinearity_check(
+                base_segment, other_segment, min_thickness, max_distance
+            ) and segments_angle(base_segment, other_segment, angle_tolerance=3):
                 to_merge.append(other_segment)
 
         # Merge all the segments in to_merge into a single segment
@@ -749,8 +902,8 @@ def angle_between_segments(seg1, seg2):
     dy2 = seg2[1][1] - seg2[0][1]
 
     dot_product = dx1 * dx2 + dy1 * dy2
-    magnitude1 = (dx1 ** 2 + dy1 ** 2) ** 0.5
-    magnitude2 = (dx2 ** 2 + dy2 ** 2) ** 0.5
+    magnitude1 = (dx1**2 + dy1**2) ** 0.5
+    magnitude2 = (dx2**2 + dy2**2) ** 0.5
 
     if magnitude1 * magnitude2 == 0:
         return 90  # Perpendicular
@@ -773,7 +926,7 @@ def perpendicular_distance_between_segments(seg1, seg2):
     if segments_angle(seg1, seg2):
         return distance_point_to_line(seg2[0], seg1[0], seg1[1])
     else:
-        return float('inf')
+        return float("inf")
 
 
 def check_overlap_parallel_segments(seg1, seg2, min_overlap):
@@ -783,16 +936,18 @@ def check_overlap_parallel_segments(seg1, seg2, min_overlap):
         return math.atan2(dy, dx)
 
     def rotate_point(point, angle_for_rotation):
-        rotation_matrix = np.array([
-            [np.cos(angle_for_rotation), -np.sin(angle_for_rotation)],
-            [np.sin(angle_for_rotation), np.cos(angle_for_rotation)]
-        ])
+        rotation_matrix = np.array(
+            [
+                [np.cos(angle_for_rotation), -np.sin(angle_for_rotation)],
+                [np.sin(angle_for_rotation), np.cos(angle_for_rotation)],
+            ]
+        )
         return np.dot(rotation_matrix, np.array([point[0], point[1]]))
 
     def process_and_rotate_segments(seg_1, seg_2, rot_angle):
         return [
             [rotate_point(seg_1[0], -rot_angle), rotate_point(seg_1[1], -rot_angle)],
-            [rotate_point(seg_2[0], -rot_angle), rotate_point(seg_2[1], -rot_angle)]
+            [rotate_point(seg_2[0], -rot_angle), rotate_point(seg_2[1], -rot_angle)],
         ]
 
     def find_x_axis_overlap(rot_seg1, rot_seg2):
@@ -833,10 +988,15 @@ def group_segments(segments, max_wall_thickness, wall_label, angle_tolerance=5):
         while i < len(segments):
             segment = segments[i]
             if (
-                    segments_angle(current_segment, segment, angle_tolerance) and
-                    any(distance_between_points(p1, p2) <= max_wall_thickness for p1 in current_segment for p2 in
-                        segment) and
-                    check_overlap_parallel_segments(current_segment, segment, min_overlap=max_wall_thickness)
+                segments_angle(current_segment, segment, angle_tolerance)
+                and any(
+                    distance_between_points(p1, p2) <= max_wall_thickness
+                    for p1 in current_segment
+                    for p2 in segment
+                )
+                and check_overlap_parallel_segments(
+                    current_segment, segment, min_overlap=max_wall_thickness
+                )
             ):
                 parallel_group.append(segment)
                 segments.pop(i)
@@ -864,35 +1024,58 @@ def calculate_wall_axis(group):
     shorter_segment = group[1 - np.argmax(lengths)]
 
     # Calculate the direction of the axis based on the longer segment
-    direction = [longer_segment[1][0] - longer_segment[0][0], longer_segment[1][1] - longer_segment[0][1]]
+    direction = [
+        longer_segment[1][0] - longer_segment[0][0],
+        longer_segment[1][1] - longer_segment[0][1],
+    ]
     norm = (direction[0] ** 2 + direction[1] ** 2) ** 0.5
     direction = [direction[0] / norm, direction[1] / norm]
 
     # Calculate the mean distance between the two segments
-    mean_distance = np.mean([perpendicular_distance_between_segments(longer_segment, shorter_segment),
-                             perpendicular_distance_between_segments(shorter_segment, longer_segment)])
+    mean_distance = np.mean(
+        [
+            perpendicular_distance_between_segments(longer_segment, shorter_segment),
+            perpendicular_distance_between_segments(shorter_segment, longer_segment),
+        ]
+    )
     half_mean_distance = mean_distance / 2
 
     # Calculate the start and end of the axis (initial position)
-    axis_start = [longer_segment[0][0] - half_mean_distance * direction[1],
-                  longer_segment[0][1] + half_mean_distance * direction[0]]
-    axis_end = [longer_segment[1][0] - half_mean_distance * direction[1],
-                longer_segment[1][1] + half_mean_distance * direction[0]]
+    axis_start = [
+        longer_segment[0][0] - half_mean_distance * direction[1],
+        longer_segment[0][1] + half_mean_distance * direction[0],
+    ]
+    axis_end = [
+        longer_segment[1][0] - half_mean_distance * direction[1],
+        longer_segment[1][1] + half_mean_distance * direction[0],
+    ]
 
     # Calculate sum of distances for initial position
-    distance_sum_initial = sum([distance_between_points(pt, axis_start) + distance_between_points(pt, axis_end)
-                                for pt in longer_segment + shorter_segment])
+    distance_sum_initial = sum(
+        [
+            distance_between_points(pt, axis_start) + distance_between_points(pt, axis_end)
+            for pt in longer_segment + shorter_segment
+        ]
+    )
 
     # Flip the axis to the other side of the longer segment
-    axis_start_flipped = [longer_segment[0][0] + half_mean_distance * direction[1],
-                          longer_segment[0][1] - half_mean_distance * direction[0]]
-    axis_end_flipped = [longer_segment[1][0] + half_mean_distance * direction[1],
-                        longer_segment[1][1] - half_mean_distance * direction[0]]
+    axis_start_flipped = [
+        longer_segment[0][0] + half_mean_distance * direction[1],
+        longer_segment[0][1] - half_mean_distance * direction[0],
+    ]
+    axis_end_flipped = [
+        longer_segment[1][0] + half_mean_distance * direction[1],
+        longer_segment[1][1] - half_mean_distance * direction[0],
+    ]
 
     # Calculate sum of distances for flipped position
     distance_sum_flipped = sum(
-        [distance_between_points(pt, axis_start_flipped) + distance_between_points(pt, axis_end_flipped)
-         for pt in longer_segment + shorter_segment])
+        [
+            distance_between_points(pt, axis_start_flipped)
+            + distance_between_points(pt, axis_end_flipped)
+            for pt in longer_segment + shorter_segment
+        ]
+    )
 
     # Choose the position that gives a smaller sum
     if distance_sum_flipped < distance_sum_initial:
@@ -940,14 +1123,20 @@ def adjust_intersections(wall_axes, max_wall_thickness):
     return wall_axes
 
 
-def plot_parallel_groups(groups, wall_axes, binary_image, points_2d, x_min, x_max, y_min, y_max, storey):
+def plot_parallel_groups(
+    groups, wall_axes, binary_image, points_2d, x_min, x_max, y_min, y_max, storey
+):
     fig = plt.figure(figsize=(10, 8))
 
     # Plot the binary image
-    plt.imshow(binary_image, cmap='gray', origin='lower', extent=(x_min, x_max, y_min, y_max), alpha=0.6)
+    plt.imshow(
+        binary_image, cmap="gray", origin="lower", extent=(x_min, x_max, y_min, y_max), alpha=0.6
+    )
 
     # Scatter plot of points_2d
-    plt.scatter(points_2d[:, 0], points_2d[:, 1], color='green', alpha=0.2, s=1)  # alpha for transparency
+    plt.scatter(
+        points_2d[:, 0], points_2d[:, 1], color="green", alpha=0.2, s=1
+    )  # alpha for transparency
 
     # Plot each group with a unique color
     for idx, group in enumerate(groups):
@@ -960,15 +1149,21 @@ def plot_parallel_groups(groups, wall_axes, binary_image, points_2d, x_min, x_ma
         # Plot the corresponding wall axis
         axis = wall_axes[idx]
         if axis:
-            plt.plot([axis[0][0], axis[1][0]], [axis[0][1], axis[1][1]], color=color, linestyle='--', linewidth=1.5)
+            plt.plot(
+                [axis[0][0], axis[1][0]],
+                [axis[0][1], axis[1][1]],
+                color=color,
+                linestyle="--",
+                linewidth=1.5,
+            )
 
-    plt.xlabel('x-coordinate (m)')
-    plt.ylabel('y-coordinate (m)')
+    plt.xlabel("x-coordinate (m)")
+    plt.ylabel("y-coordinate (m)")
     plt.title("Identified walls and their axes")
     ax = fig.gca()
-    ax.set_aspect('equal', 'box')
+    ax.set_aspect("equal", "box")
     fig.tight_layout()
-    plt.savefig('images/walls_in_storey_%d.jpg' % (storey + 1), dpi=200)
+    plt.savefig("images/walls_in_storey_%d.jpg" % (storey + 1), dpi=200)
     plt.close(fig)
 
 
@@ -1002,17 +1197,31 @@ def swell_polygon(vertices, thickness):
     return offset_segments
 
 
-def identify_walls(pointcloud, pointcloud_resolution, minimum_wall_length, minimum_wall_thickness,
-                   maximum_wall_thickness, z_floor, z_ceiling, grid_coefficient=5, slab_polygon=None,
-                   exterior_scan=False, exterior_walls_thickness=0.3):
+def identify_walls(
+    pointcloud,
+    pointcloud_resolution,
+    minimum_wall_length,
+    minimum_wall_thickness,
+    maximum_wall_thickness,
+    z_floor,
+    z_ceiling,
+    grid_coefficient=5,
+    slab_polygon=None,
+    exterior_scan=False,
+    exterior_walls_thickness=0.3,
+):
     x_coords, y_coords, z_coords = zip(*pointcloud)
     z_section_boundaries = [0.85, 1.2]  # percentage of the height for the storey sections
 
     # Calculate z-coordinate limits
     z_max_in_point_cloud = np.max(z_coords)
     z_min_in_point_cloud = np.min(z_coords)
-    z_max = z_min_in_point_cloud + z_section_boundaries[1] * (z_max_in_point_cloud - z_min_in_point_cloud)
-    z_min = z_min_in_point_cloud + z_section_boundaries[0] * (z_max_in_point_cloud - z_min_in_point_cloud)
+    z_max = z_min_in_point_cloud + z_section_boundaries[1] * (
+        z_max_in_point_cloud - z_min_in_point_cloud
+    )
+    z_min = z_min_in_point_cloud + z_section_boundaries[0] * (
+        z_max_in_point_cloud - z_min_in_point_cloud
+    )
 
     # Filter points based on z-coordinate limits
     filtered_indices = [i for i, z in enumerate(z_coords) if z_min <= z <= z_max]
@@ -1025,20 +1234,22 @@ def identify_walls(pointcloud, pointcloud_resolution, minimum_wall_length, minim
     x_max, y_max = np.max(points_2d, axis=0)
     x_values_full = np.arange(x_min + 0.5 * pixel_size, x_max, pixel_size)
     y_values_full = np.arange(y_min + 0.5 * pixel_size, y_max, pixel_size)
-    grid_full, _, _ = np.histogram2d(points_2d[:, 0], points_2d[:, 1], bins=[x_values_full, y_values_full])
+    grid_full, _, _ = np.histogram2d(
+        points_2d[:, 0], points_2d[:, 1], bins=[x_values_full, y_values_full]
+    )
     grid_full = grid_full.T
-    #plot_histogram(grid_full, x_values_full, y_values_full)
+    # plot_histogram(grid_full, x_values_full, y_values_full)
 
     # Convert the 2D histogram to binary (mask) based on a threshold
     threshold = 0.01  # relative point cloud density
     print("Converting the 2D histogram to binary (mask) based on a threshold")
     binary_image = (grid_full > threshold).astype(np.uint8) * 255
-    #plot_binary_image(binary_image)
+    # plot_binary_image(binary_image)
 
     # Pre-process the binary image
     print("Pre-processing the binary image")
-    binary_image = closing(binary_image, rectangle(5, 5)) # closes small holes in the binary mask
-    #plot_binary_image(binary_image)
+    binary_image = closing(binary_image, rectangle(5, 5))  # closes small holes in the binary mask
+    # plot_binary_image(binary_image)
 
     # Find contours in the binary image
     print("Finding contours in the binary image")
@@ -1054,49 +1265,57 @@ def identify_walls(pointcloud, pointcloud_resolution, minimum_wall_length, minim
         transformation_matrix = np.float32([[1, 0, shift_x], [0, 1, shift_y]])
         adjusted_cnt = cv2.transform(cnt, transformation_matrix)
         adjusted_contours.append(adjusted_cnt)
-    #plot_contours(adjusted_contours)
+    # plot_contours(adjusted_contours)
 
     # Extract all segments from contours
     print("Extracting all segments from contours with Douglas-Peuckert algorithm")
     all_segments = []
     for contour in adjusted_contours:
-        all_segments.extend(get_line_segments(contour, pixel_size,
-                                              segment_approximation_tolerance=0.04))
+        all_segments.extend(
+            get_line_segments(contour, pixel_size, segment_approximation_tolerance=0.04)
+        )
 
     # Convert pixel-based segment coordinates to real-world coordinates
     print("Converting pixel-based segment coordinates to real-world coordinates")
-    segments_in_world_coords = [[[x[0] * pixel_size + x_min, x[1] * pixel_size + y_min] for x in segment] for segment in
-                                all_segments]
+    segments_in_world_coords = [
+        [[x[0] * pixel_size + x_min, x[1] * pixel_size + y_min] for x in segment]
+        for segment in all_segments
+    ]
 
     # Filter out segments shorter than the given threshold
     print("Filtering out segments shorter than minimum wall length")
     filtered_segments = [
-        segment for segment in segments_in_world_coords
-        if distance_between_points(segment[0], segment[1]) >= minimum_wall_length]
-    #plot_segments_with_random_colors(filtered_segments, name="filtered_wall_segments")
+        segment
+        for segment in segments_in_world_coords
+        if distance_between_points(segment[0], segment[1]) >= minimum_wall_length
+    ]
+    # plot_segments_with_random_colors(filtered_segments, name="filtered_wall_segments")
 
     # Merge the co-linear segments using the updated function
     print("Merging the co-linear segments")
-    final_wall_segments = merge_collinear_segments(filtered_segments.copy(), minimum_wall_thickness,
-                                                   maximum_wall_thickness)
-    #plot_segments_with_random_colors(final_wall_segments, name="final_wall_segments")
+    final_wall_segments = merge_collinear_segments(
+        filtered_segments.copy(), minimum_wall_thickness, maximum_wall_thickness
+    )
+    # plot_segments_with_random_colors(final_wall_segments, name="final_wall_segments")
 
     # Group parallel segments
     print("Grouping parallel segments")
-    parallel_groups, wall_labels, facade_wall_candidates = (
-        group_segments(final_wall_segments, maximum_wall_thickness, 'interior'))
+    parallel_groups, wall_labels, facade_wall_candidates = group_segments(
+        final_wall_segments, maximum_wall_thickness, "interior"
+    )
 
     # Create facade wall surfaces into the list of exterior wall candidates
     if not exterior_scan:
         swollen_polygon_segments = swell_polygon(slab_polygon.get_xy(), exterior_walls_thickness)
         facade_wall_candidates.extend(swollen_polygon_segments)
         print("Grouping parallel exterior segments")
-        parallel_facade_groups, wall_labels_facade, _ = (
-            group_segments(facade_wall_candidates, maximum_wall_thickness, 'exterior'))
+        parallel_facade_groups, wall_labels_facade, _ = group_segments(
+            facade_wall_candidates, maximum_wall_thickness, "exterior"
+        )
         parallel_groups.extend(parallel_facade_groups)
         wall_labels.extend(wall_labels_facade)
 
-    #plot_parallel_wall_groups(parallel_groups)
+    # plot_parallel_wall_groups(parallel_groups)
     # plot_segments_with_candidates(facade_wall_candidates)
 
     wall_axes, wall_thicknesses = [], []
@@ -1109,22 +1328,25 @@ def identify_walls(pointcloud, pointcloud_resolution, minimum_wall_length, minim
     # plot_parallel_groups(parallel_groups, wall_axes, binary_image, points_2d, x_min, x_max, y_min, y_max, storey)
 
     start_points, end_points = zip(*wall_axes)
-    wall_materials = ['Concrete'] * len(parallel_groups)
+    wall_materials = ["Concrete"] * len(parallel_groups)
 
     # Calculate direction vectors for each wall axis
     wall_directions = [(axis[1][0] - axis[0][0], axis[1][1] - axis[0][1]) for axis in wall_axes]
 
     # Assign points to walls
-    wall_groups, wall_thicknesses = assign_points_to_walls(x_coords, y_coords, z_coords, wall_axes, parallel_groups,
-                                                           z_floor, z_ceiling)
+    wall_groups, wall_thicknesses = assign_points_to_walls(
+        x_coords, y_coords, z_coords, wall_axes, parallel_groups, z_floor, z_ceiling
+    )
 
     # Rotate each group of points to the x-z plane
     rotated_wall_groups, rotated_wall_axes = [], []
     wall_counter = 0
     for group, direction in zip(wall_groups, wall_directions):
         rotated_wall = rotate_points_to_xz_plane(group, direction)
-        wall_axis = [(wall_axes[wall_counter][0][0], wall_axes[wall_counter][0][1], z_floor + z_ceiling / 2),
-                     (wall_axes[wall_counter][1][0], wall_axes[wall_counter][1][1], z_floor + z_ceiling / 2)]
+        wall_axis = [
+            (wall_axes[wall_counter][0][0], wall_axes[wall_counter][0][1], z_floor + z_ceiling / 2),
+            (wall_axes[wall_counter][1][0], wall_axes[wall_counter][1][1], z_floor + z_ceiling / 2),
+        ]
         rotated_wall_axis = rotate_points_to_xz_plane(wall_axis, direction)
         rotated_wall_groups.append(rotated_wall)
         rotated_wall_axes.append(rotated_wall_axis)
@@ -1156,11 +1378,19 @@ def identify_walls(pointcloud, pointcloud_resolution, minimum_wall_length, minim
         translated_filtered_rotated_wall_groups.append(translated_wall)
         # plot_wall(translated_wall, wall_thicknesses[idx], idx+1)
 
-    return (start_points, end_points, wall_thicknesses, wall_materials, translated_filtered_rotated_wall_groups,
-            wall_labels)
+    return (
+        start_points,
+        end_points,
+        wall_thicknesses,
+        wall_materials,
+        translated_filtered_rotated_wall_groups,
+        wall_labels,
+    )
 
 
-def identify_floor_and_ceiling(points, point_cloud_resolution, min_distance=2, plot_histograms_for_floors=False):
+def identify_floor_and_ceiling(
+    points, point_cloud_resolution, min_distance=2, plot_histograms_for_floors=False
+):
     """Identify the z-coordinates of the floor and ceiling surfaces in the wall point cloud."""
 
     # Extract z-coordinates
@@ -1177,8 +1407,9 @@ def identify_floor_and_ceiling(points, point_cloud_resolution, min_distance=2, p
     height_threshold = 0.5 * max(hist)
 
     # Find peaks in the histogram
-    peaks, properties = find_peaks(hist, distance=min_distance, height=height_threshold,
-                                   prominence=0.25 * height_threshold)
+    peaks, properties = find_peaks(
+        hist, distance=min_distance, height=height_threshold, prominence=0.25 * height_threshold
+    )
 
     # Check if we have at least 2 peaks
     if len(peaks) < 2:
@@ -1194,24 +1425,34 @@ def identify_floor_and_ceiling(points, point_cloud_resolution, min_distance=2, p
     # Plotting
     if plot_histograms_for_floors:
         plt.figure(figsize=(10, 6))
-        plt.bar(bin_edges[:-1], hist, width=point_cloud_resolution, align='edge')
-        plt.plot(bin_edges[:-1], hist, color='black', lw=1.5)
-        plt.scatter(bin_edges[peaks], hist[peaks], color='red', s=100, zorder=3, label='Detected peaks')
-        plt.axvline(x=z_floor, color='cyan', linestyle='--', label=f'z_floor: {z_floor:.3f}')
-        plt.axvline(x=z_ceiling, color='yellow', linestyle='--', label=f'z_ceiling: {z_ceiling:.3f}')
-        plt.xlabel('z-coordinate (m)')
-        plt.ylabel('Frequency')
+        plt.bar(bin_edges[:-1], hist, width=point_cloud_resolution, align="edge")
+        plt.plot(bin_edges[:-1], hist, color="black", lw=1.5)
+        plt.scatter(
+            bin_edges[peaks], hist[peaks], color="red", s=100, zorder=3, label="Detected peaks"
+        )
+        plt.axvline(x=z_floor, color="cyan", linestyle="--", label=f"z_floor: {z_floor:.3f}")
+        plt.axvline(
+            x=z_ceiling, color="yellow", linestyle="--", label=f"z_ceiling: {z_ceiling:.3f}"
+        )
+        plt.xlabel("z-coordinate (m)")
+        plt.ylabel("Frequency")
         plt.legend()
         # plt.title('z-coordinate histogram with floor and ceiling peaks')
-        plt.savefig('images/wall_outputs_images/identified_floor_and_ceiling_surfaces.jpg', dpi=300)
-        plt.savefig('images/wall_outputs_images/identified_floor_and_ceiling_surfaces.pdf')
+        plt.savefig("images/wall_outputs_images/identified_floor_and_ceiling_surfaces.jpg", dpi=300)
+        plt.savefig("images/wall_outputs_images/identified_floor_and_ceiling_surfaces.pdf")
         plt.show()
 
     return z_floor, z_ceiling
 
 
-def identify_wall_faces(wall_number, points, wall_label, point_cloud_resolution, min_distance=25,
-                        plot_histograms_for_walls=False):
+def identify_wall_faces(
+    wall_number,
+    points,
+    wall_label,
+    point_cloud_resolution,
+    min_distance=25,
+    plot_histograms_for_walls=False,
+):
     """Identify the y-coordinates of the wall surfaces in the wall point cloud."""
 
     # Extract y-coordinates
@@ -1232,11 +1473,12 @@ def identify_wall_faces(wall_number, points, wall_label, point_cloud_resolution,
         plot_histogram_with_threshold(hist, height_threshold)
 
     # Find peaks in the histogram
-    peaks, properties = find_peaks(hist, distance=min_distance, height=height_threshold,
-                                   prominence=0.25 * height_threshold)
+    peaks, properties = find_peaks(
+        hist, distance=min_distance, height=height_threshold, prominence=0.25 * height_threshold
+    )
 
     # Check if we have at least 2 peaks
-    if wall_label == 'interior':
+    if wall_label == "interior":
         if len(peaks) >= 2:
             y1 = (bin_edges[peaks[0]] + bin_edges[peaks[0] + 1]) / 2
             y2 = (bin_edges[peaks[1]] + bin_edges[peaks[1] + 1]) / 2
@@ -1262,17 +1504,21 @@ def identify_wall_faces(wall_number, points, wall_label, point_cloud_resolution,
     # Plotting
     if plot_histograms_for_walls:
         plt.figure(figsize=(10, 6))
-        plt.bar(bin_edges[:-1], hist, width=point_cloud_resolution, align='edge')
-        plt.plot(bin_edges[:-1], hist, color='black', lw=1.5)
-        plt.scatter(bin_edges[peaks], hist[peaks], color='red', s=100, zorder=3, label='Detected peaks')
-        plt.axvline(x=y1, color='cyan', linestyle='--', label=f'wall face 1: {y1:.3f}')
-        plt.axvline(x=y2, color='yellow', linestyle='--', label=f'wall face 2: {y2:.3f}')
-        plt.xlabel('y-coordinate (m)')
-        plt.ylabel('Frequency')
+        plt.bar(bin_edges[:-1], hist, width=point_cloud_resolution, align="edge")
+        plt.plot(bin_edges[:-1], hist, color="black", lw=1.5)
+        plt.scatter(
+            bin_edges[peaks], hist[peaks], color="red", s=100, zorder=3, label="Detected peaks"
+        )
+        plt.axvline(x=y1, color="cyan", linestyle="--", label=f"wall face 1: {y1:.3f}")
+        plt.axvline(x=y2, color="yellow", linestyle="--", label=f"wall face 2: {y2:.3f}")
+        plt.xlabel("y-coordinate (m)")
+        plt.ylabel("Frequency")
         plt.legend()
         # plt.title('y-coordinate histogram with wall faces peaks')
-        plt.savefig('images/wall_outputs_images/identified_wall_faces_%d.jpg' % wall_number, dpi=300)
-        plt.savefig('images/wall_outputs_images/identified_wall_faces_%d.pdf' % wall_number)
+        plt.savefig(
+            "images/wall_outputs_images/identified_wall_faces_%d.jpg" % wall_number, dpi=300
+        )
+        plt.savefig("images/wall_outputs_images/identified_wall_faces_%d.pdf" % wall_number)
         plt.show()
 
     return y1, y2
@@ -1285,7 +1531,7 @@ def distance_points_to_line(points, line_start, line_end):
     points = np.array(points) - np.array(line_start)  # Translate points based on line_start
     projected_point = np.dot(points, line_vec)[:, None] * line_vec[None, :]
     perpendicular_vec = points - projected_point
-    distances = np.sqrt(np.sum(perpendicular_vec ** 2, axis=1))
+    distances = np.sqrt(np.sum(perpendicular_vec**2, axis=1))
     return distances
 
 
@@ -1299,7 +1545,9 @@ def compute_wall_thickness(segment_group):
     return np.mean(distances)
 
 
-def assign_points_to_walls(x_coords, y_coords, z_coords, wall_axes, parallel_groups, z_floor, z_ceiling):
+def assign_points_to_walls(
+    x_coords, y_coords, z_coords, wall_axes, parallel_groups, z_floor, z_ceiling
+):
     # Stack coordinates into a single array
     points = np.vstack([x_coords, y_coords, z_coords]).T
 
@@ -1375,17 +1623,29 @@ def export_wall_points_to_txt(wall_groups, output_dir="walls_outputs_txt"):
     # Loop through each wall group and save its points to a .txt file
     for idx, wall in enumerate(wall_groups, start=1):
         file_path = os.path.join(output_dir, f"wall_{idx}.txt")
-        with open(file_path, 'w') as file:
+        with open(file_path, "w") as file:
             for point in wall:
                 file.write(f"{point[0]} {point[1]} {point[2]}\n")
 
     print(f"Exported wall points to {output_dir} directory.")
 
 
-def identify_openings(wall_number, wall_points, wall_label, resolution, grid_roughness,
-                      histogram_threshold=0.7, thickness_for_extraction=0.07,
-                      min_opening_width=0.3, min_opening_height=0.3, max_opening_aspect_ratio=4,
-                      door_z_max=0.1, door_min_height=1.8, opening_min_z_top=1.6, plot_histograms_for_openings=False):
+def identify_openings(
+    wall_number,
+    wall_points,
+    wall_label,
+    resolution,
+    grid_roughness,
+    histogram_threshold=0.7,
+    thickness_for_extraction=0.07,
+    min_opening_width=0.3,
+    min_opening_height=0.3,
+    max_opening_aspect_ratio=4,
+    door_z_max=0.1,
+    door_min_height=1.8,
+    opening_min_z_top=1.6,
+    plot_histograms_for_openings=False,
+):
     """Detect rectangular openings (windows and doors) in the wall."""
 
     valid_opening_widths, valid_opening_heights, valid_opening_types = [], [], []
@@ -1395,9 +1655,14 @@ def identify_openings(wall_number, wall_points, wall_label, resolution, grid_rou
         inner_threshold = y1 - thickness_for_extraction / 2
         outer_threshold = y2 + thickness_for_extraction / 2
 
-        projected_points = [(x, z) for x, y, z in wall_points if
-                            (inner_threshold <= y <= (y1 + thickness_for_extraction / 2) or
-                             (y2 - thickness_for_extraction / 2) <= y <= outer_threshold)]
+        projected_points = [
+            (x, z)
+            for x, y, z in wall_points
+            if (
+                inner_threshold <= y <= (y1 + thickness_for_extraction / 2)
+                or (y2 - thickness_for_extraction / 2) <= y <= outer_threshold
+            )
+        ]
 
         # Project all points onto the x-coordinate
         x_coords, z_coords = zip(*projected_points)
@@ -1436,13 +1701,17 @@ def identify_openings(wall_number, wall_points, wall_label, resolution, grid_rou
         for x_start, x_end in openings:
             middle_x = (x_start + x_end) / 2
             tolerance = min_opening_width
-            points_at_middle = [z for x, z in projected_points if (middle_x - tolerance) <= x <= (middle_x + tolerance)]
+            points_at_middle = [
+                z
+                for x, z in projected_points
+                if (middle_x - tolerance) <= x <= (middle_x + tolerance)
+            ]
 
             z_hist, z_edges = np.histogram(points_at_middle, bins=z_bins, range=(z_min, z_max))
             try:
                 max2 = sorted(z_hist, reverse=True)[2]
-            except:
-                pass
+            except (IndexError, ValueError):
+                max2 = 0  # fallback value when not enough data points
             z_threshold = max2 * 0.2
 
             candidates = []
@@ -1464,25 +1733,28 @@ def identify_openings(wall_number, wall_points, wall_label, resolution, grid_rou
                 width = x_end - x_start
                 height = refined_z_max - refined_z_min
 
-                if (height > min_opening_height and (height / width) < max_opening_aspect_ratio
-                        and opening_min_z_top < refined_z_max):
+                if (
+                    height > min_opening_height
+                    and (height / width) < max_opening_aspect_ratio
+                    and opening_min_z_top < refined_z_max
+                ):
 
                     if min([refined_z_min, refined_z_max]) > door_z_max:
                         valid_opening_widths.append((x_start, x_end))
                         valid_opening_heights.append((refined_z_min, refined_z_max))
-                        valid_opening_types.append('window')
+                        valid_opening_types.append("window")
                     elif height > door_min_height:
                         valid_opening_widths.append((x_start, x_end))
                         valid_opening_heights.append((refined_z_min, refined_z_max))
                         valid_opening_heights[-1] = (0.0, refined_z_max)
-                        valid_opening_types.append('door')
+                        valid_opening_types.append("door")
                     else:
                         pass
 
             if plot_histograms_for_openings:
                 # Plotting
-                plt.rc('text', usetex=True)
-                plt.rc('font', family='serif', size=11)
+                plt.rc("text", usetex=True)
+                plt.rc("font", family="serif", size=11)
                 fig = plt.figure(figsize=(8 / 1.2, 5 / 1.2))
                 bin_width_x = (x_max - x_min) / bins
                 bin_width_z = (z_max - z_min) / z_bins
@@ -1491,45 +1763,66 @@ def identify_openings(wall_number, wall_points, wall_label, resolution, grid_rou
                 axs0 = fig.add_subplot(221)
                 xs_diluted, zs_diluted = zip(*projected_points[0::50])
                 xs, zs = zip(*projected_points)
-                axs0.scatter(xs_diluted, zs_diluted, s=2, c='g')
-                for (x_start, x_end), (z1, z2), op_type in zip(valid_opening_widths, valid_opening_heights,
-                                                               valid_opening_types):
+                axs0.scatter(xs_diluted, zs_diluted, s=2, c="g")
+                for (x_start, x_end), (z1, z2), op_type in zip(
+                    valid_opening_widths, valid_opening_heights, valid_opening_types
+                ):
                     z_start = min([z1, z2])
                     z_end = max([z1, z2])
-                    if op_type == 'door':
+                    if op_type == "door":
                         axs0.add_patch(
-                            plt.Rectangle((x_start, z_start), x_end - x_start, z_end - z_start, edgecolor='r',
-                                          facecolor='red', alpha=0.2, linewidth=2, label='door'))
+                            plt.Rectangle(
+                                (x_start, z_start),
+                                x_end - x_start,
+                                z_end - z_start,
+                                edgecolor="r",
+                                facecolor="red",
+                                alpha=0.2,
+                                linewidth=2,
+                                label="door",
+                            )
+                        )
                     else:
                         axs0.add_patch(
-                            plt.Rectangle((x_start, z_start), x_end - x_start, z_end - z_start, edgecolor='blue',
-                                          facecolor='blue', alpha=0.2, linewidth=2, label='window'))
-                axs0.set_xlabel(r'$x$ (m)')
-                axs0.set_ylabel(r'$z$ (m)')
+                            plt.Rectangle(
+                                (x_start, z_start),
+                                x_end - x_start,
+                                z_end - z_start,
+                                edgecolor="blue",
+                                facecolor="blue",
+                                alpha=0.2,
+                                linewidth=2,
+                                label="window",
+                            )
+                        )
+                axs0.set_xlabel(r"$x$ (m)")
+                axs0.set_ylabel(r"$z$ (m)")
 
                 # Plot x-histogram
                 axs1 = fig.add_subplot(223)
                 axs1.bar(edges[:-1], hist, width=bin_width_x)
-                axs1.axhline(y=x_threshold, color='r', linestyle='dashed', label='x-threshold')
-                axs1.legend(loc='upper right')
-                axs1.set_xlabel(r'$x$ (m)')
-                axs1.set_ylabel(r'Frequency')
+                axs1.axhline(y=x_threshold, color="r", linestyle="dashed", label="x-threshold")
+                axs1.legend(loc="upper right")
+                axs1.set_xlabel(r"$x$ (m)")
+                axs1.set_ylabel(r"Frequency")
 
                 # Plot z-histogram for the opening refinement
                 axs2 = fig.add_subplot(222)
                 axs2.barh(z_edges[:-1], z_hist, height=bin_width_z)
-                axs2.axvline(x=z_threshold, color='g', linestyle='dashed', label='z-threshold')
+                axs2.axvline(x=z_threshold, color="g", linestyle="dashed", label="z-threshold")
                 axs2.legend()
-                axs2.set_xlabel(r'Frequency')
-                axs2.set_ylabel(r'$z$ (m)')
+                axs2.set_xlabel(r"Frequency")
+                axs2.set_ylabel(r"$z$ (m)")
                 plt.tight_layout()
-                plt.savefig('images/wall_outputs_images/wall_%d_openings.jpg' % wall_number, dpi=300)
-                plt.savefig('images/pdf/wall_%d_opening.pdf' % wall_number)
+                plt.savefig(
+                    "images/wall_outputs_images/wall_%d_openings.jpg" % wall_number, dpi=300
+                )
+                plt.savefig("images/pdf/wall_%d_opening.pdf" % wall_number)
                 plt.show()
             else:
                 pass
 
         return valid_opening_widths, valid_opening_heights, valid_opening_types
     except (TypeError, ValueError):
-        print('Problem with wall boundaries identification, no openings detected.')
+        print("Problem with wall boundaries identification, no openings detected.")
         return valid_opening_widths, valid_opening_heights, valid_opening_types

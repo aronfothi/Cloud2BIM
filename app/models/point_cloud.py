@@ -1,16 +1,19 @@
 """Models for point cloud data validation and processing."""
+
 from typing import List, Optional
 from pydantic import BaseModel, Field, validator
 import numpy as np
 
+
 class PointCloudData(BaseModel):
     """Model for standardized point cloud data transmission."""
+
     points: List[List[float]] = Field(..., description="List of [x,y,z] coordinates")
     colors: Optional[List[List[float]]] = Field(None, description="Optional list of [r,g,b] values")
     format: str = Field(..., description="Original format of the point cloud (e.g., 'ptx', 'ply')")
     filename: str = Field(..., description="Original filename")
 
-    @validator('points')
+    @validator("points")
     def validate_points(cls, v):
         """Validate that points are properly formatted."""
         if not v:
@@ -19,13 +22,13 @@ class PointCloudData(BaseModel):
             raise ValueError("All points must have exactly 3 coordinates (x,y,z)")
         return v
 
-    @validator('colors')
+    @validator("colors")
     def validate_colors(cls, v, values):
         """Validate that colors match points and are normalized."""
         if v is not None:
-            if 'points' not in values:
+            if "points" not in values:
                 raise ValueError("Cannot validate colors without points")
-            if len(v) != len(values['points']):
+            if len(v) != len(values["points"]):
                 raise ValueError("Number of colors must match number of points")
             if not all(len(c) == 3 for c in v):
                 raise ValueError("All colors must have exactly 3 values (r,g,b)")

@@ -3,9 +3,10 @@ import os
 import tempfile
 import numpy as np
 import open3d as o3d
-import ifcopenshell # Added import
-from app.core.cloud2entities import _read_ptx_as_text, detect_elements # Added detect_elements
-from app.core.aux_functions import load_config_and_variables # Added import
+import ifcopenshell  # Added import
+from app.core.cloud2entities import _read_ptx_as_text, detect_elements  # Added detect_elements
+from app.core.aux_functions import load_config_and_variables  # Added import
+
 
 class TestPtxTextReader(unittest.TestCase):
 
@@ -16,7 +17,7 @@ class TestPtxTextReader(unittest.TestCase):
 
     def _create_temp_ptx_file(self, filename: str, content: str) -> str:
         filepath = os.path.join(self.test_dir.name, filename)
-        with open(filepath, 'w') as f:
+        with open(filepath, "w") as f:
             f.write(content)
         return filepath
 
@@ -39,10 +40,7 @@ class TestPtxTextReader(unittest.TestCase):
         self.assertTrue(pcd.has_points(), "Point cloud should have points.")
         self.assertEqual(len(pcd.points), 2, "Should parse 2 points.")
 
-        expected_points = np.array([
-            [1.0, 2.0, 3.0],
-            [4.0, 5.0, 6.0]
-        ])
+        expected_points = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
         np.testing.assert_array_almost_equal(np.asarray(pcd.points), expected_points, decimal=3)
 
         self.assertTrue(np.array_equal(pcd.points, expected_points))
@@ -67,17 +65,13 @@ class TestPtxTextReader(unittest.TestCase):
         self.assertTrue(pcd.has_points())
         self.assertEqual(len(pcd.points), 2)
 
-        expected_points = np.array([
-            [1.0, 2.0, 3.0],
-            [4.0, 5.0, 6.0]
-        ])
+        expected_points = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
         np.testing.assert_array_almost_equal(np.asarray(pcd.points), expected_points, decimal=3)
 
         self.assertTrue(pcd.has_colors())
-        expected_colors = np.array([
-            [10/255.0, 20/255.0, 30/255.0],
-            [40/255.0, 50/255.0, 60/255.0]
-        ])
+        expected_colors = np.array(
+            [[10 / 255.0, 20 / 255.0, 30 / 255.0], [40 / 255.0, 50 / 255.0, 60 / 255.0]]
+        )
         np.testing.assert_array_almost_equal(np.asarray(pcd.colors), expected_colors, decimal=3)
 
     def test_read_ptx_empty_file(self):
@@ -108,7 +102,7 @@ class TestPtxTextReader(unittest.TestCase):
         self.assertIsNone(pcd, "Should return None if no point data lines are found after header.")
 
     def test_read_ptx_standard_header_format(self):
-        """ Test with a more standard PTX header (2 lines dims, 4x4 matrix) """
+        """Test with a more standard PTX header (2 lines dims, 4x4 matrix)"""
         ptx_content = """
 2
 1
@@ -130,7 +124,9 @@ class TestPtxTextReader(unittest.TestCase):
         expected_points = np.array([[1.1, 2.2, 3.3], [4.4, 5.5, 6.6]])
         np.testing.assert_array_almost_equal(np.asarray(pcd.points), expected_points, decimal=3)
         self.assertTrue(pcd.has_colors())
-        expected_colors = np.array([[10/255.0, 20/255.0, 30/255.0], [40/255.0, 50/255.0, 60/255.0]])
+        expected_colors = np.array(
+            [[10 / 255.0, 20 / 255.0, 30 / 255.0], [40 / 255.0, 50 / 255.0, 60 / 255.0]]
+        )
         np.testing.assert_array_almost_equal(np.asarray(pcd.colors), expected_colors, decimal=3)
 
     def test_read_ptx_mixed_data_formats(self):
@@ -164,7 +160,7 @@ class TestPtxTextReader(unittest.TestCase):
         # For CI/CD or different environments, this path might need to be relative
         # or managed via environment variables/configuration.
         filepath = "/home/fothar/Cloud2BIM_web/tests/data/scan6.ptx"
-        
+
         if not os.path.exists(filepath):
             self.skipTest(f"Test file not found: {filepath}. Skipping test.")
             return
@@ -173,24 +169,31 @@ class TestPtxTextReader(unittest.TestCase):
 
         self.assertIsNotNone(pcd, f"Point cloud should not be None for {filepath}.")
         self.assertTrue(pcd.has_points(), f"Point cloud from {filepath} should have points.")
-        self.assertTrue(len(pcd.points) > 0, f"Number of points in {filepath} should be greater than 0.")
+        self.assertTrue(
+            len(pcd.points) > 0, f"Number of points in {filepath} should be greater than 0."
+        )
         # Optionally, log the number of points found for verification
         print(f"Successfully loaded {len(pcd.points)} points from {filepath}")
+
 
 class TestSegmentationAndIFC(unittest.TestCase):
     def setUp(self):
         self.test_data_dir = "/home/fothar/Cloud2BIM_web/tests/data"
         self.ptx_file_path = os.path.join(self.test_data_dir, "scan6.ptx")
         self.config_file_path = os.path.join(self.test_data_dir, "sample_config.yaml")
-        
+
         if not os.path.exists(self.ptx_file_path):
             # unittest.skip automatically skips the test if this condition is met.
             # However, setUp is called for each test method. Raising an error might be
             # more direct if the file is absolutely essential for all tests in the class.
             # For a single test, self.skipTest in the test method itself is also an option.
-            raise FileNotFoundError(f"Test PTX file not found: {self.ptx_file_path}. This test requires it.")
+            raise FileNotFoundError(
+                f"Test PTX file not found: {self.ptx_file_path}. This test requires it."
+            )
         if not os.path.exists(self.config_file_path):
-            raise FileNotFoundError(f"Test config file not found: {self.config_file_path}. This test requires it.")
+            raise FileNotFoundError(
+                f"Test config file not found: {self.config_file_path}. This test requires it."
+            )
 
         self.output_dir_context = tempfile.TemporaryDirectory()
         self.output_dir = self.output_dir_context.name
@@ -199,19 +202,19 @@ class TestSegmentationAndIFC(unittest.TestCase):
     def test_segmentation_produces_two_slabs_from_scan6(self):
         """
         Tests the full segmentation and IFC generation process using scan6.ptx
-        and sample_config.yaml. It verifies that exactly two slabs are created 
+        and sample_config.yaml. It verifies that exactly two slabs are created
         in the output IFC file.
-        
-        This test is EXPECTED TO FAIL until the 'detect_slabs' functionality 
+
+        This test is EXPECTED TO FAIL until the 'detect_slabs' functionality
         is properly implemented in the core logic.
         """
         config_params = load_config_and_variables(self.config_file_path)
         self.assertIsNotNone(config_params, "Failed to load configuration.")
-        
+
         # Ensure the config has the output filename, or handle default in detect_elements
         # Assuming sample_config.yaml contains:
         # General_Parameters:
-        #   output_filename: "output.ifc" 
+        #   output_filename: "output.ifc"
         # If not, this part of the config might need adjustment or the test needs to set it.
         # For this test, we rely on the sample_config.yaml to provide it.
 
@@ -219,33 +222,40 @@ class TestSegmentationAndIFC(unittest.TestCase):
             pcd_path=self.ptx_file_path,  # Corrected argument name
             file_type="ptx",  # Added missing file_type argument
             config_params=config_params,
-            output_dir=self.output_dir 
+            output_dir=self.output_dir,
         )
 
         # ---- BEGIN ADDED DEBUG PRINTS ----
         print(f"DEBUG_TEST: Type of ifc_file_path: {type(ifc_file_path)}")
-        print(f"DEBUG_TEST: Value of ifc_file_path: {ifc_file_path!r}") # Using !r for unambiguous representation
+        print(
+            f"DEBUG_TEST: Value of ifc_file_path: {ifc_file_path!r}"
+        )  # Using !r for unambiguous representation
         print(f"DEBUG_TEST: Type of point_mapping_path: {type(point_mapping_path)}")
         print(f"DEBUG_TEST: Value of point_mapping_path: {point_mapping_path!r}")
         # ---- END ADDED DEBUG PRINTS ----
 
-        self.assertTrue(os.path.exists(ifc_file_path),
-                        f"IFC file was not generated at {ifc_file_path}.")
-        
+        self.assertTrue(
+            os.path.exists(ifc_file_path), f"IFC file was not generated at {ifc_file_path}."
+        )
+
         try:
             ifc_model = ifcopenshell.open(ifc_file_path)
         except Exception as e:
             self.fail(f"Failed to open generated IFC file '{ifc_file_path}': {e}")
 
         slabs = ifc_model.by_type("IfcSlab")
-        
+
         # Log for debugging, especially since it's expected to fail initially
         print(f"Found {len(slabs)} IfcSlab entities in {ifc_file_path}.")
         if len(slabs) != 2 and os.path.exists(point_mapping_path):
-             print(f"Point mapping file generated at: {point_mapping_path}")
-        
-        self.assertEqual(len(slabs), 2, 
-                         f"Expected 2 IfcSlab entities, but found {len(slabs)} in {ifc_file_path}.")
+            print(f"Point mapping file generated at: {point_mapping_path}")
 
-if __name__ == '__main__':
+        self.assertEqual(
+            len(slabs),
+            2,
+            f"Expected 2 IfcSlab entities, but found {len(slabs)} in {ifc_file_path}.",
+        )
+
+
+if __name__ == "__main__":
     unittest.main()

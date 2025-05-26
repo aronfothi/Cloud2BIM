@@ -16,6 +16,7 @@ pip-delete-this-directory.txt
 log.txt
 
 /out/*
+client/out/*
 
 # Distribution / packaging
 dist/

@@ -1,6 +1,7 @@
 """
 This module contains pytest fixtures that can be reused across multiple test files.
 """
+
 import os
 import sys  # Add this import
 from pathlib import Path  # Add this import to use Path for path manipulation
@@ -14,10 +15,12 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 
+
 @pytest.fixture
 def test_client():
     """Create a test client for making HTTP requests."""
     return TestClient(app)
+
 
 @pytest.fixture
 def sample_ptx_file():
@@ -27,6 +30,7 @@ def sample_ptx_file():
     if not ptx_path.exists():
         pytest.skip("Test PTX file not available")
     return ptx_path
+
 
 @pytest.fixture
 def sample_config_file():
