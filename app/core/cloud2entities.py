@@ -12,6 +12,9 @@ import os
 import logging  # Use standard logging
 import json
 import open3d as o3d
+import psutil
+from datetime import datetime
+from ..models.job import ProcessingStage
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +24,7 @@ class CloudToBimProcessor:
     Processes a 3D point cloud file and converts it into an IFC BIM model.
     """
 
-    def __init__(self, job_id: str, config_data: dict, output_dir: str, point_cloud_data=None):
+    def __init__(self, job_id: str, config_data: dict, output_dir: str, point_cloud_data=None, progress_callback=None):
         """
         Initializes the CloudToBimProcessor.
 
@@ -32,12 +35,14 @@ class CloudToBimProcessor:
             output_dir: The directory where output files will be saved.
             point_cloud_data: Pre-loaded point cloud data (Open3D PointCloud or tuple of numpy arrays).
                              If provided, the processor won't try to load from a file.
+            progress_callback: Optional callback function to update progress (stage: str, progress: int)
         """
         self.job_id = job_id
         self.config = config_data
         print(f"Config: {self.config}")
         self.output_dir = output_dir
         self.log_filename = os.path.join(self.output_dir, f"{self.job_id}_processing.log")
+        self.progress_callback = progress_callback
         self._setup_logging()
 
         # Initialize state variables
@@ -50,6 +55,10 @@ class CloudToBimProcessor:
         self.ifc_model = None
         self.last_time = time.time()
         self.point_cloud_data = point_cloud_data
+        self.start_time = time.time()
+        self.total_points = 0
+        self.processed_points = 0
+        self.current_stage = ProcessingStage.INITIALIZING
 
         # Default IFC file path (can be overridden by config)
         self.ifc_output_file = os.path.join(self.output_dir, f"{self.job_id}_model.ifc")
@@ -75,6 +84,85 @@ class CloudToBimProcessor:
         elapsed = current_time - self.last_time
         logger.debug(f"Job {self.job_id}: Time since last log: {elapsed:.2f}s")
         self.last_time = current_time
+
+    def _update_progress(self, stage: str, progress: int):
+        """Updates progress via callback if available"""
+        if self.progress_callback:
+            self.progress_callback(stage, progress)
+        self._log(f"Progress: {stage} - {progress}%")
+        # Add a small delay to make progress visible
+        time.sleep(0.5)  # Half second delay for demo purposes
+
+    def _update_detailed_progress(self, stage: ProcessingStage, percentage: int, 
+                                current_operation: str = None, 
+                                processed_items: int = None,
+                                total_items: int = None):
+        """Enhanced progress update with detailed information"""
+        current_time = time.time()
+        elapsed_time = current_time - self.start_time
+        
+        # Calculate processing speed
+        processing_speed = None
+        if elapsed_time > 0 and self.processed_points > 0:
+            speed = self.processed_points / elapsed_time
+            if speed > 1000:
+                processing_speed = f"{speed/1000:.1f}k points/sec"
+            else:
+                processing_speed = f"{speed:.1f} points/sec"
+        
+        # Estimate remaining time
+        estimated_remaining = None
+        if percentage > 0 and percentage < 100:
+            total_estimated_time = elapsed_time * (100 / percentage)
+            estimated_remaining = int(total_estimated_time - elapsed_time)
+        
+        # Get memory usage
+        process = psutil.Process(os.getpid())
+        memory_usage = process.memory_info().rss / 1024 / 1024  # MB
+        cpu_usage = process.cpu_percent()
+        
+        progress_data = {
+            "status": "running",
+            "stage": stage.value,
+            "progress": {
+                "percentage": percentage,
+                "stage": stage,
+                "stage_description": self._get_stage_description(stage),
+                "current_operation": current_operation,
+                "processed_items": processed_items or self.processed_points,
+                "total_items": total_items or self.total_points,
+                "estimated_remaining_seconds": estimated_remaining,
+                "processing_speed": processing_speed
+            },
+            "performance": {
+                "start_time": datetime.fromtimestamp(self.start_time),
+                "last_update_time": datetime.fromtimestamp(current_time),
+                "points_processed": self.processed_points,
+                "memory_usage_mb": memory_usage,
+                "cpu_usage_percent": cpu_usage
+            }
+        }
+        
+        if self.progress_callback:
+            self.progress_callback(progress_data)
+        
+        # Add small delay for visibility
+        time.sleep(0.1)
+
+    def _get_stage_description(self, stage: ProcessingStage) -> str:
+        """Get human-readable description for each stage"""
+        descriptions = {
+            ProcessingStage.INITIALIZING: "Setting up processing environment...",
+            ProcessingStage.LOADING_POINT_CLOUD: "Loading and parsing point cloud data...",
+            ProcessingStage.PREPROCESSING: "Cleaning and preparing point cloud...",
+            ProcessingStage.DETECTING_SLABS: "Identifying floor and ceiling surfaces...",
+            ProcessingStage.DETECTING_WALLS: "Detecting wall structures...",
+            ProcessingStage.DETECTING_OPENINGS: "Finding doors and windows...",
+            ProcessingStage.DETECTING_ZONES: "Analyzing spatial zones...",
+            ProcessingStage.GENERATING_IFC: "Creating BIM model structure...",
+            ProcessingStage.FINALIZING: "Saving results and cleanup..."
+        }
+        return descriptions.get(stage, "Processing...")
 
     def _assign_config_variables(self):
         """Assigns configuration variables to instance attributes."""
@@ -734,9 +822,11 @@ class CloudToBimProcessor:
         """
         try:
             self._log("Processing started.")
+            self._update_progress("Processing started", 35)
 
             # 1. Load and prepare point cloud
             self._log("Loading and preparing point cloud...")
+            self._update_progress("Loading and preparing point cloud", 40)
             self._load_and_prepare_point_cloud()
             if self.points_xyz.size == 0:
                 raise ValueError("Point cloud is empty after loading")
@@ -744,6 +834,7 @@ class CloudToBimProcessor:
 
             # 2. Identify slabs (floors and ceilings)
             self._log("Identifying slabs...")
+            self._update_progress("Identifying slabs (floors and ceilings)", 50)
             self._identify_slabs()
             if not self.slabs:
                 raise ValueError("No slabs identified in point cloud")
@@ -751,22 +842,26 @@ class CloudToBimProcessor:
 
             # 3. Identify walls and openings
             self._log("Identifying walls and openings...")
+            self._update_progress("Identifying walls and openings", 60)
             self._identify_walls_and_openings()
             self._log(f"{len(self.walls)} walls and {len(self.all_openings)} openings identified")
 
             # 4. Identify zones (rooms/spaces)
             self._log("Identifying zones...")
+            self._update_progress("Identifying zones (rooms/spaces)", 70)
             self._identify_zones()
             num_zones = sum(len(zones_dict) for zones_dict in self.zones)
             self._log(f"{num_zones} zones identified across all storeys")
 
             # 5. Generate IFC model
             self._log("Generating IFC model...")
+            self._update_progress("Generating IFC model", 80)
             self._generate_ifc_model()
             self._log(f"IFC model generated at {self.ifc_output_file}")
 
             # 6. Save point-to-element mapping
             self._log("Saving point-to-element mapping...")
+            self._update_progress("Saving point-to-element mapping", 85)
             self._save_point_mapping()
 
             self._log("Processing completed successfully")

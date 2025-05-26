@@ -208,8 +208,12 @@ def poll_job_status(server_url: str, job_id: str) -> dict | None:
     status_url = f"{server_url}/status/{job_id}"
     print(f"Polling job status for {job_id} at {status_url}...")
 
+    poll_count = 0
     while True:
         try:
+            poll_count += 1
+            print(f"Poll #{poll_count}: Checking status...")
+            
             response = requests.get(
                 status_url, timeout=40
             )  # Increased timeout from 20 to 30 seconds
@@ -226,7 +230,7 @@ def poll_job_status(server_url: str, job_id: str) -> dict | None:
             if status in ["completed", "failed"]:
                 return status_data
 
-            time.sleep(5)  # Poll every 5 seconds
+            time.sleep(2)  # Poll every 2 seconds to catch more progress updates
         except RequestException as e:
             print(f"Error polling status: {e}")
             return None

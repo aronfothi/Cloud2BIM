@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from starlette.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uuid
 import shutil
@@ -9,12 +10,32 @@ import logging
 from typing import Dict, Any, List
 import yaml
 import pathlib
+import time
+
+# Import the SSE router
+from app.api.sse import router as sse_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Cloud2BIM Service")
+app = FastAPI(
+    title="Cloud2BIM Service",
+    description="Async point cloud to IFC BIM model conversion service with real-time progress tracking",
+    version="1.0.0"
+)
+
+# Add CORS middleware for web client support
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure appropriately for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include SSE router
+app.include_router(sse_router, prefix="/api", tags=["streaming"])
 
 # Supported file formats
 SUPPORTED_FORMATS = [".ptx", ".xyz", ".ply"]  # Added .ply format
@@ -80,6 +101,7 @@ async def process_conversion_job(
     """
     Processes the point cloud to IFC conversion using the CloudToBimProcessor.
     """
+    print(f"[DEBUG] Starting process_conversion_job for {job_id}")
     from app.core.cloud2entities import CloudToBimProcessor
     import open3d as o3d
 
@@ -92,6 +114,7 @@ async def process_conversion_job(
     jobs[job_id]["stage"] = "Initializing"
     jobs[job_id]["progress"] = 0
     logger.info(f"Job {job_id}: Started processing for {point_cloud_filepath}")
+    print(f"[DEBUG] Job {job_id}: Status set to processing")
 
     try:
         # Step 1: Parse YAML configuration
@@ -121,23 +144,24 @@ async def process_conversion_job(
         jobs[job_id]["stage"] = "Processing point cloud"
         jobs[job_id]["progress"] = 30
 
-        # Create processor instance
-        processor = CloudToBimProcessor(
-            job_id=job_id,
-            config_data=config_data,
-            output_dir=job_output_dir,
-            point_cloud_data=point_cloud_data,
-        )
-
         # Update progress during processing
         def update_progress(stage: str, progress: int):
             jobs[job_id]["stage"] = stage
             jobs[job_id]["progress"] = progress
             logger.info(f"Job {job_id}: {stage} - {progress}%")
+            print(f"[DEBUG] Progress update: Job {job_id}: {stage} - {progress}%")  # Debug print
+
+        # Create processor instance with progress callback
+        processor = CloudToBimProcessor(
+            job_id=job_id,
+            config_data=config_data,
+            output_dir=job_output_dir,
+            point_cloud_data=point_cloud_data,
+            progress_callback=update_progress,
+        )
 
         # Run the actual processing using the process() method
-        update_progress("Processing point cloud", 40)
-        processor.process()  # This handles all the steps internally
+        processor.process()  # This now handles progress updates internally
 
         # Check if the output files were created and copy them to the expected names
         generated_ifc_file = os.path.join(job_output_dir, f"{job_id}_model.ifc")
@@ -189,6 +213,24 @@ async def process_conversion_job(
 
 
 # --- API Endpoints ---
+
+
+@app.get("/")
+async def root():
+    """Root endpoint providing API information"""
+    return {
+        "service": "Cloud2BIM Service",
+        "version": "1.0.0",
+        "description": "Async point cloud to IFC BIM model conversion service with real-time progress tracking",
+        "endpoints": {
+            "convert": "/convert",
+            "status": "/status/{job_id}",
+            "results": "/results/{job_id}/model.ifc",
+            "point_mapping": "/results/{job_id}/point_mapping.json",
+            "stream_progress": "/api/stream/progress/{job_id}",
+            "stream_basic": "/api/stream/basic/{job_id}"
+        }
+    }
 
 
 @app.post("/convert", response_model=Job, status_code=202)  # Set status_code to 202 Accepted
@@ -271,6 +313,8 @@ async def create_conversion_job(
     # by being passed to process_conversion_job. Let's ensure it's in `jobs[job_id]`.
     jobs[job_id]["config_content"] = config_content_str
 
+    print(f"[DEBUG] Job {job_id} initialized with status: {jobs[job_id]['status']}")
+
     # Add the processing to background tasks
     # Pass the original filename to be used by process_conversion_job if needed for output naming
     background_tasks.add_task(
@@ -279,6 +323,12 @@ async def create_conversion_job(
         os.path.basename(point_cloud_file.filename),
         config_content_str,
     )
+
+    print(f"[DEBUG] Background task added for job {job_id}")
+    
+    # Add a brief delay to allow the client to start polling before processing completes
+    import asyncio
+    await asyncio.sleep(1)
 
     # Return 202 Accepted status code as per todo.md
     # The response_model will still be Job, but FastAPI handles the status code.
@@ -380,6 +430,12 @@ async def download_point_mapping_file(job_id: str):
         )
 
     return FileResponse(path=filepath, filename=filename, media_type="application/json")
+
+
+@app.get("/debug/test")
+async def debug_test():
+    """Debug endpoint to verify our changes are loaded"""
+    return {"message": "Progress tracking version is loaded", "timestamp": time.time()}
 
 
 if __name__ == "__main__":

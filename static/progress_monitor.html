@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cloud2BIM Progress Monitor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .header {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+        }
+        
+        .job-input {
+            margin-bottom: 20px;
+        }
+        
+        .job-input input {
+            width: 60%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        
+        .job-input button {
+            width: 35%;
+            padding: 10px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+        
+        .job-input button:hover {
+            background-color: #0056b3;
+        }
+        
+        .progress-container {
+            margin-top: 20px;
+            display: none;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745, #20c997);
+            width: 0%;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+        }
+        
+        .status-info {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }
+        
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+        
+        .performance-metrics {
+            background-color: #e9ecef;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        
+        .connection-status {
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            text-align: center;
+            font-weight: bold;
+        }
+        
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        
+        .logs {
+            background-color: #222;
+            color: #00ff00;
+            padding: 15px;
+            border-radius: 5px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+        
+        .method-selector {
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .method-selector label {
+            margin: 0 15px;
+            font-weight: bold;
+        }
+        
+        .method-selector input[type="radio"] {
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏗️ Cloud2BIM Progress Monitor</h1>
+            <p>Real-time progress tracking with Server-Sent Events</p>
+        </div>
+        
+        <div class="method-selector">
+            <label>
+                <input type="radio" name="method" value="sse" checked> 
+                Server-Sent Events (Real-time)
+            </label>
+            <label>
+                <input type="radio" name="method" value="polling"> 
+                Polling (Every 2s)
+            </label>
+        </div>
+        
+        <div class="job-input">
+            <input type="text" id="jobId" placeholder="Enter Job ID" />
+            <button onclick="startTracking()">Start Tracking</button>
+        </div>
+        
+        <div id="connectionStatus" class="connection-status disconnected">
+            Not Connected
+        </div>
+        
+        <div id="progressContainer" class="progress-container">
+            <div class="progress-bar">
+                <div id="progressFill" class="progress-fill">0%</div>
+            </div>
+            
+            <div id="statusInfo" class="status-info">
+                <div class="status-row">
+                    <span><strong>Status:</strong></span>
+                    <span id="jobStatus">-</span>
+                </div>
+                <div class="status-row">
+                    <span><strong>Stage:</strong></span>
+                    <span id="currentStage">-</span>
+                </div>
+                <div class="status-row">
+                    <span><strong>Current Operation:</strong></span>
+                    <span id="currentOperation">-</span>
+                </div>
+                <div class="status-row">
+                    <span><strong>Processing Speed:</strong></span>
+                    <span id="processingSpeed">-</span>
+                </div>
+                <div class="status-row">
+                    <span><strong>Estimated Remaining:</strong></span>
+                    <span id="estimatedTime">-</span>
+                </div>
+            </div>
+            
+            <div id="performanceMetrics" class="performance-metrics">
+                <strong>Performance Metrics:</strong><br>
+                Memory Usage: <span id="memoryUsage">-</span> MB | 
+                CPU Usage: <span id="cpuUsage">-</span>% |
+                Points Processed: <span id="pointsProcessed">-</span>
+            </div>
+        </div>
+        
+        <div id="logs" class="logs"></div>
+    </div>
+
+    <script>
+        let eventSource = null;
+        let pollingInterval = null;
+        let currentJobId = null;
+        
+        function log(message) {
+            const logs = document.getElementById('logs');
+            const timestamp = new Date().toLocaleTimeString();
+            logs.innerHTML += `[${timestamp}] ${message}\n`;
+            logs.scrollTop = logs.scrollHeight;
+        }
+        
+        function updateConnectionStatus(connected, method = '') {
+            const status = document.getElementById('connectionStatus');
+            if (connected) {
+                status.className = 'connection-status connected';
+                status.textContent = `Connected via ${method}`;
+            } else {
+                status.className = 'connection-status disconnected';
+                status.textContent = 'Not Connected';
+            }
+        }
+        
+        function updateProgress(data) {
+            const progress = data.progress || {};
+            const performance = data.performance || {};
+            
+            // Update progress bar
+            const percentage = progress.percentage || 0;
+            const progressFill = document.getElementById('progressFill');
+            progressFill.style.width = percentage + '%';
+            progressFill.textContent = percentage + '%';
+            
+            // Update status info
+            document.getElementById('jobStatus').textContent = data.status || '-';
+            document.getElementById('currentStage').textContent = progress.stage_description || '-';
+            document.getElementById('currentOperation').textContent = progress.current_operation || '-';
+            document.getElementById('processingSpeed').textContent = progress.processing_speed || '-';
+            
+            // Update time estimate
+            const remaining = progress.estimated_remaining_seconds;
+            if (remaining !== null && remaining !== undefined) {
+                if (remaining < 60) {
+                    document.getElementById('estimatedTime').textContent = `${remaining}s`;
+                } else {
+                    const minutes = Math.floor(remaining / 60);
+                    const seconds = remaining % 60;
+                    document.getElementById('estimatedTime').textContent = `${minutes}m ${seconds}s`;
+                }
+            } else {
+                document.getElementById('estimatedTime').textContent = '-';
+            }
+            
+            // Update performance metrics
+            document.getElementById('memoryUsage').textContent = 
+                performance.memory_usage_mb ? performance.memory_usage_mb.toFixed(1) : '-';
+            document.getElementById('cpuUsage').textContent = 
+                performance.cpu_usage_percent ? performance.cpu_usage_percent.toFixed(1) : '-';
+            document.getElementById('pointsProcessed').textContent = 
+                performance.points_processed || '-';
+        }
+        
+        function startSSETracking(jobId) {
+            log(`Starting SSE tracking for job: ${jobId}`);
+            
+            eventSource = new EventSource(`/api/stream/${jobId}`);
+            
+            eventSource.onopen = function() {
+                updateConnectionStatus(true, 'SSE');
+                log('SSE connection established');
+            };
+            
+            eventSource.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    updateProgress(data);
+                    log(`Progress update: ${data.progress?.percentage || 0}% - ${data.progress?.stage_description || 'Processing'}`);
+                } catch (e) {
+                    log(`Error parsing SSE data: ${e.message}`);
+                }
+            };
+            
+            eventSource.addEventListener('progress', function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    updateProgress(data);
+                    log(`Progress: ${data.progress?.percentage || 0}%`);
+                } catch (e) {
+                    log(`Error parsing progress data: ${e.message}`);
+                }
+            });
+            
+            eventSource.addEventListener('complete', function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    log(`Job completed with status: ${data.final_status}`);
+                    stopTracking();
+                } catch (e) {
+                    log(`Error parsing completion data: ${e.message}`);
+                }
+            });
+            
+            eventSource.addEventListener('error', function(event) {
+                log('SSE connection error occurred');
+                updateConnectionStatus(false);
+            });
+            
+            eventSource.onerror = function(event) {
+                log('SSE connection lost');
+                updateConnectionStatus(false);
+            };
+        }
+        
+        function startPollingTracking(jobId) {
+            log(`Starting polling tracking for job: ${jobId}`);
+            updateConnectionStatus(true, 'Polling');
+            
+            pollingInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/status/${jobId}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        updateProgress(data);
+                        log(`Polling update: ${data.progress?.percentage || 0}%`);
+                        
+                        if (data.status === 'completed' || data.status === 'failed') {
+                            log(`Job ${data.status}`);
+                            stopTracking();
+                        }
+                    } else {
+                        log(`Polling error: ${response.status}`);
+                    }
+                } catch (error) {
+                    log(`Polling error: ${error.message}`);
+                }
+            }, 2000);
+        }
+        
+        function startTracking() {
+            const jobId = document.getElementById('jobId').value.trim();
+            if (!jobId) {
+                alert('Please enter a Job ID');
+                return;
+            }
+            
+            // Stop any existing tracking
+            stopTracking();
+            
+            currentJobId = jobId;
+            document.getElementById('progressContainer').style.display = 'block';
+            
+            // Clear logs
+            document.getElementById('logs').innerHTML = '';
+            
+            // Get selected method
+            const method = document.querySelector('input[name="method"]:checked').value;
+            
+            if (method === 'sse') {
+                startSSETracking(jobId);
+            } else {
+                startPollingTracking(jobId);
+            }
+        }
+        
+        function stopTracking() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+                log('SSE connection closed');
+            }
+            
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+                log('Polling stopped');
+            }
+            
+            updateConnectionStatus(false);
+        }
+        
+        // Handle page unload
+        window.addEventListener('beforeunload', stopTracking);
+    </script>
+</body>
+</html>

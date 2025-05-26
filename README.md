@@ -1,12 +1,13 @@
 # Cloud2BIM Async Web Service
 
-A FastAPI-based web service that processes 3D point cloud files (PTX or XYZ format) and a YAML configuration to generate structured BIM models in IFC format. Based on the open-source [Cloud2BIM](https://github.com/aronfothi/Cloud2BIM) project, this service segments building elements such as slabs, walls, and openings, and returns both an IFC file and a point-to-element index mapping.
+A FastAPI-based web service that processes 3D point cloud files (PTX, XYZ, or PLY format) and a YAML configuration to generate structured BIM models in IFC format. Based on the open-source [Cloud2BIM](https://github.com/aronfothi/Cloud2BIM) project, this service segments building elements such as slabs, walls, and openings, and returns both an IFC file and a point-to-element index mapping.
 
 ---
 
 ## 🚀 Features
 
-* Accepts `.ptx` and `.xyz` point cloud formats
+* Accepts `.ptx`, `.xyz`, and `.ply` point cloud formats
+* Automatically converts multiple point cloud files to PLY format for processing
 * Uses Cloud2BIM segmentation logic
 * Asynchronous processing with job tracking
 * YAML-based configurable pipeline
@@ -53,7 +54,7 @@ Visit [http://localhost:8005/docs](http://localhost:8005/docs) for Swagger UI.
 
 | Endpoint                               | Method | Description                                                                 |
 | -------------------------------------- | ------ | --------------------------------------------------------------------------- |
-| `/convert`                             | POST   | Upload point cloud and config files, initiates conversion.                  |
+| `/convert`                             | POST   | Upload point cloud file (PLY format) and config file, initiates conversion. |
 | `/status/{job_id}`                     | GET    | Check job progress, status, current stage, and any error messages.          |
 | `/results/{job_id}/model.ifc`          | GET    | Download the generated IFC model file for a completed job.                  |
 | `/results/{job_id}/point_mapping.json` | GET    | Download the JSON file mapping IFC elements to point indices for a completed job. |
