@@ -10,6 +10,8 @@ import json
 import yaml
 import logging
 import open3d as o3d
+import shutil
+import time
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -18,22 +20,17 @@ router = APIRouter()
 @router.post("/convert", response_model=Job, status_code=202)
 async def create_conversion_job(
     background_tasks: BackgroundTasks,
-    point_cloud_data: UploadFile = File(..., description="JSON file containing point cloud data"),
+    point_cloud_file: UploadFile = File(..., description="Point cloud file (e.g., PTX, XYZ, PLY)"),
     config_file: UploadFile = File(..., description="YAML configuration file"),
 ):
     """
-    Accepts point cloud data as a JSON file (containing points and optional colors)
+    Accepts a raw point cloud file (PTX, XYZ, PLY, etc.)
     and a YAML configuration file, stores them for the job, starts an asynchronous
     conversion job, and returns a job ID with status 202 (Accepted).
     """
     job_id = str(uuid.uuid4())
 
     try:
-        # Parse point cloud data
-        point_cloud_content = await point_cloud_data.read()
-        point_cloud_dict = json.loads(point_cloud_content.decode("utf-8"))
-        point_cloud = PointCloudData(**point_cloud_dict)
-
         # Parse configuration
         config_content = await config_file.read()
         config_data = yaml.safe_load(config_content.decode("utf-8"))
@@ -44,17 +41,13 @@ async def create_conversion_job(
         os.makedirs(job_input_dir, exist_ok=True)
         os.makedirs(job_output_dir, exist_ok=True)
 
-        # Convert point cloud data to Open3D format and save as PLY
-        points_array, colors_array = point_cloud.to_numpy()
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(points_array)
-        if colors_array is not None:
-            pcd.colors = o3d.utility.Vector3dVector(colors_array)
-
-        # Save point cloud in PLY format for processing
-        pc_filepath = os.path.join(job_input_dir, f"{job_id}_input.ply")
-        o3d.io.write_point_cloud(pc_filepath, pcd)
-        logger.info(f"Job {job_id}: Saved point cloud data to {pc_filepath}")
+        # Save the uploaded point cloud file directly
+        pc_filename = point_cloud_file.filename or f"{job_id}_input_unknown_ext"
+        pc_filepath = os.path.join(job_input_dir, pc_filename)
+        
+        with open(pc_filepath, "wb") as buffer:
+            shutil.copyfileobj(point_cloud_file.file, buffer)
+        logger.info(f"Job {job_id}: Saved uploaded point cloud file to {pc_filepath}")
 
         # Save configuration
         config_filepath = os.path.join(job_input_dir, f"{job_id}_config.yaml")
@@ -66,11 +59,12 @@ async def create_conversion_job(
         jobs[job_id] = {
             "status": "pending",
             "stage": "Queued",
-            "progress": 0,
+            "progress": {"percentage": 0, "stage": "Queued", "stage_description": "Job received and queued."},
             "message": "Job received and queued for processing.",
             "point_cloud_file_path": pc_filepath,
-            "original_point_cloud_filename": point_cloud.filename,
+            "original_point_cloud_filename": pc_filename,
             "config_data": config_data,
+            "updated_at": time.time()
         }
 
         # Start processing
@@ -80,22 +74,29 @@ async def create_conversion_job(
             job_id=job_id,
             status=jobs[job_id]["status"],
             message=jobs[job_id]["message"],
-            stage=jobs[job_id]["stage"],
-            progress=jobs[job_id]["progress"],
+            stage=jobs[job_id]["progress"]["stage"],
+            progress=jobs[job_id]["progress"]["percentage"],
         )
 
-    except json.JSONDecodeError as e:
-        logger.error(f"Invalid JSON in point cloud data: {e}")
-        raise HTTPException(status_code=400, detail="Invalid point cloud data format")
     except yaml.YAMLError as e:
         logger.error(f"Invalid YAML in configuration: {e}")
         raise HTTPException(status_code=400, detail="Invalid configuration format")
     except Exception as e:
-        logger.error(f"Error processing job {job_id}: {str(e)}")
+        logger.error(f"Error processing job {job_id}: {str(e)}", exc_info=True)
+        if job_id in jobs:
+            jobs[job_id].update({
+                "status": "failed",
+                "message": f"Error during job setup: {str(e)}",
+                "stage": "Setup Error",
+                "progress": {"percentage": 0, "stage": "Setup Error", "stage_description": str(e)},
+                "updated_at": time.time()
+            })
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        await point_cloud_data.close()
-        await config_file.close()
+        if point_cloud_file:
+            await point_cloud_file.close()
+        if config_file:
+            await config_file.close()
 
 
 @router.get("/status/{job_id}", response_model=Job)

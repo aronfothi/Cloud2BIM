@@ -28,7 +28,7 @@ class SSEProgressStreamer:
     def __init__(self, job_id: str, jobs_store: Dict[str, Dict[str, Any]]):
         self.job_id = job_id
         self.jobs = jobs_store
-        self.last_progress = -1
+        self.last_progress_percentage = -1 # Track the percentage specifically
         
     async def stream_progress(self, request: Request):
         """Generator function for SSE progress streaming"""
@@ -50,17 +50,21 @@ class SSEProgressStreamer:
                     break
                 
                 job = self.jobs[self.job_id]
-                current_progress = job.get("progress", {}).get("percentage", 0)
                 
-                # Only send update if progress changed
-                if current_progress != self.last_progress:
-                    self.last_progress = current_progress
+                # Safely access progress details
+                progress_info = job.get("progress", {})
+                current_progress_percentage = progress_info.get("percentage", 0) if isinstance(progress_info, dict) else 0
+                
+                if current_progress_percentage != self.last_progress_percentage:
+                    self.last_progress_percentage = current_progress_percentage
                     
+                    # Ensure all parts of event_data are safely accessed
+                    performance_data = job.get("performance")
                     event_data = {
                         "job_id": self.job_id,
                         "status": job.get("status"),
-                        "progress": job.get("progress", {}),
-                        "performance": job.get("performance", {}),
+                        "progress": progress_info if isinstance(progress_info, dict) else {"percentage": current_progress_percentage, "stage": "unknown"},
+                        "performance": performance_data if isinstance(performance_data, dict) else {},
                         "timestamp": job.get("updated_at")
                     }
                     
@@ -69,14 +73,15 @@ class SSEProgressStreamer:
                         "data": json.dumps(event_data)
                     }
                 
-                # Check if job is completed
-                if job.get("status") in ["completed", "failed"]:
+                job_status = job.get("status")
+                if job_status in ["completed", "failed"]:
+                    result_info = job.get("result")
                     yield {
                         "event": "complete",
                         "data": json.dumps({
                             "job_id": self.job_id,
-                            "final_status": job.get("status"),
-                            "result": job.get("result")
+                            "final_status": job_status,
+                            "result": result_info if isinstance(result_info, dict) else {"message": str(result_info)}
                         })
                     }
                     break
@@ -85,11 +90,15 @@ class SSEProgressStreamer:
                 await asyncio.sleep(0.5)
                 
         except Exception as e:
-            logger.error(f"Error in SSE stream for job {self.job_id}: {e}")
-            yield {
-                "event": "error",
-                "data": json.dumps({"error": str(e)})
-            }
+            logger.error(f"Error in SSE stream for job {self.job_id}: {e}", exc_info=True)
+            try:
+                yield {
+                    "event": "error",
+                    "data": json.dumps({"error": str(e)})
+                }
+            except Exception as ex_inner: # Handle cases where yielding itself might fail
+                logger.error(f"Critical error in SSE stream for job {self.job_id} while reporting error: {ex_inner}", exc_info=True)
+
 
 @router.get("/stream/progress/{job_id}")
 async def stream_job_progress(job_id: str, request: Request, jobs_store: Dict[str, Dict[str, Any]] = Depends(get_jobs_store)):
@@ -136,19 +145,22 @@ async def stream_basic_progress(job_id: str, request: Request, jobs_store: Dict[
                 break
             
             job = jobs_store[job_id]
-            current_percentage = job.get("progress", {}).get("percentage", 0)
+            # Safely access progress percentage
+            progress_info = job.get("progress", {})
+            current_percentage = progress_info.get("percentage", 0) if isinstance(progress_info, dict) else 0
             
             if current_percentage != last_percentage:
                 last_percentage = current_percentage
                 yield {
                     "event": "progress",
-                    "data": str(current_percentage)
+                    "data": str(current_percentage) # Basic stream sends only percentage as string
                 }
             
-            if job.get("status") in ["completed", "failed"]:
+            job_status = job.get("status")
+            if job_status in ["completed", "failed"]:
                 yield {
                     "event": "complete",
-                    "data": job.get("status")
+                    "data": job_status # Basic stream sends final status as string
                 }
                 break
                 

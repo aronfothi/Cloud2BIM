@@ -1,0 +1,36 @@
+dilute: false
+dilution_factor: 10
+exterior_scan: false
+pc_resolution: 0.002
+preprocessing:
+  voxel_size: 0.002
+  noise_threshold: 0.02
+detection:
+  grid_coefficient: 5
+
+bfs_thickness: 0.3
+tfs_thickness: 0.4
+
+min_wall_length: 0.10
+min_wall_thickness: 0.05
+max_wall_thickness: 0.75
+exterior_walls_thickness: 0.3
+
+ifc:
+  project_name: Sample project
+  project_long_name: Deconstruction of non-load-bearing elements
+  version: version 1.0
+
+  author_name: Slavek
+  author_surname: Zbirovsky
+  author_organization: CTU in Prague
+
+  building_name: Hotel Opatov
+  building_type: Hotel
+  building_phase: Reconstruction
+
+  site_latitude: [50, 5, 0]
+  site_longitude: [4, 22, 0]
+  site_elevation: 356.0
+
+material_for_objects: Concrete
