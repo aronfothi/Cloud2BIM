@@ -7,7 +7,7 @@ import shutil
 import os
 import asyncio
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Union
 import yaml
 import pathlib
 import time
@@ -55,10 +55,10 @@ jobs: Dict[str, Dict[str, Any]] = {}
 class Job(BaseModel):
     job_id: str
     status: str
-    message: str | None = None
-    result_url: str | None = None
-    stage: str | None = None  # Added stage information
-    progress: int | None = None  # Added progress percentage
+    message: Union[str, None] = None
+    result_url: Union[str, None] = None
+    stage: Union[str, None] = None  # Added stage information
+    progress: Union[int, None] = None  # Added progress percentage
 
 
 class ConversionRequest(BaseModel):
@@ -66,7 +66,7 @@ class ConversionRequest(BaseModel):
 
 
 # --- Helper Functions ---
-JOBS_BASE_DIR = "jobs"  # Base directory for all job-related files
+JOBS_BASE_DIR = os.environ.get("JOBS_DIR", "jobs")  # Base directory for all job-related files, configurable via environment
 
 os.makedirs(JOBS_BASE_DIR, exist_ok=True)  # Ensure base jobs directory exists
 

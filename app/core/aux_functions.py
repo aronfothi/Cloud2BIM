@@ -16,7 +16,7 @@ import numpy as np
 from scipy.signal import find_peaks
 from skimage.morphology import closing, rectangle
 import open3d as o3d
-import e57
+#import e57
 from tqdm import tqdm
 
 # Import plotting functions
@@ -632,10 +632,10 @@ def identify_slabs(
                 % ((i + 1) / 2, slab_bottom_z_coord, top_floor_ceiling_thickness * 1000)
             )
 
-        save_xyz(
+        '''save_xyz(
             horiz_surface_planes[i],
             "/home/fothar/Cloud2BIM_web/tests/data/output_xyz/horiz_surface_%d.xyz" % (i + 1),
-        )
+        )'''
 
     # plot the segmented plane
     pcd = []

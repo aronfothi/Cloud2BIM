@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  cloud2bim:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - /ssd/c2b:/app/jobs
+    restart: unless-stopped
+    environment:
+      - PYTHONPATH=/app
+      - HOST=nipg30.inf.elte.hu
+      - JOBS_DIR=/app/jobs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://nipg30.inf.elte.hu:8001/debug/test"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    network_mode: "host"

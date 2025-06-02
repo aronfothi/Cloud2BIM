@@ -40,13 +40,51 @@ pip install -r requirements.txt
 
 ---
 
+## 🐳 Docker Deployment
+
+### Using Docker Compose (Recommended)
+
+The easiest way to run the application is using Docker Compose:
+
+```bash
+# Build and start the container
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop the container
+docker-compose down
+```
+
+### Using Docker directly
+
+You can also build and run the Docker container manually:
+
+```bash
+# Build the Docker image
+docker build -t cloud2bim .
+
+# Run the container
+docker run -p 8001:8001 -v $(pwd)/jobs:/app/jobs --name cloud2bim cloud2bim
+```
+
+The API will be accessible at http://localhost:8001/docs
+
+---
+
 ## 🚪 Run the Server
 
 ```bash
+# Option 1: Using Python directly
 uvicorn app.main:app --reload --port 8005
+
+# Option 2: Using the main.py script
+python main.py
 ```
 
-Visit [http://localhost:8005/docs](http://localhost:8005/docs) for Swagger UI.
+Visit [http://localhost:8005/docs](http://localhost:8005/docs) for Swagger UI when using Option 1,
+or [http://localhost:8001/docs](http://localhost:8001/docs) when using Option 2 or Docker.
 
 ---
 
