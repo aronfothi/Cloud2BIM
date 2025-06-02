@@ -4,6 +4,12 @@
 
 This document provides developer documentation for the `Cloud2BIMAPIClient`, a Python client designed to interact with the Cloud2BIM web service. The client facilitates submitting point cloud conversion jobs, monitoring their progress in real-time using Server-Sent Events (SSE), and downloading the resulting IFC models and point mapping data.
 
+**Key Features:**
+- Submit PTX, XYZ, or PLY point cloud files.
+- Automatic conversion of PTX files to PLY format before submission.
+- Real-time job progress streaming via SSE.
+- Download of IFC model and point mapping JSON.
+
 This client is located in the `/home/fothar/Cloud2BIM_web/api_client/` directory.
 
 ## 2. Project Structure
@@ -31,7 +37,7 @@ client = Cloud2BIMAPIClient(base_url: str = "http://localhost:8000", timeout: in
 
 #### `submit_job(self, point_cloud_path: str, config_path: str) -> str`
 
-Submits a new point cloud conversion job.
+Submits a new point cloud conversion job. If a `.ptx` file is provided, it will be automatically converted to a temporary `.ply` file before submission.
 
 - **Args**:
     - `point_cloud_path`: Absolute or relative path to the point cloud file (PTX, XYZ, PLY).
@@ -80,11 +86,11 @@ A sample callback function provided in `client.py` that can be passed to `stream
 
 The `client.py` script includes a main execution block that demonstrates the typical workflow:
 
-1.  **Configuration**: Sets the API base URL, paths for the input point cloud file (`/home/fothar/Cloud2BIM_web/test_data/scan6.ptx`), a dummy configuration file, and an output directory.
+1.  **Configuration**: Sets the API base URL (e.g., `http://localhost:8001`), paths for the input point cloud file (e.g., `/home/fothar/Cloud2BIM_web/test_data/scan6.ptx`), a dummy configuration file, and an output directory.
 2.  **Dummy Config Creation**: If `dummy_config.yaml` doesn't exist in the `api_client` directory, it's created with minimal content for testing purposes.
-3.  **File Check**: Verifies the existence of the `scan6.ptx` file.
+3.  **File Check**: Verifies the existence of the input point cloud file.
 4.  **Client Instantiation**: Creates an instance of `Cloud2BIMAPIClient`.
-5.  **Job Submission**: Calls `submit_job()` with the point cloud and config file.
+5.  **Job Submission**: Calls `submit_job()` with the point cloud and config file. The client handles PTX to PLY conversion internally if needed.
 6.  **Progress Streaming**: If job submission is successful, calls `stream_progress()` using the `default_progress_printer` to display live updates from the server.
 7.  **Final Status Check**: After streaming, calls `get_job_status()` to fetch the final status (this is somewhat redundant if SSE correctly signals completion but serves as a verification step).
 8.  **Result Download**: If the job status is 'completed', calls `download_results()` to save the `model.ifc` and `point_mapping.json` to the specified `output_dir`.
@@ -92,11 +98,11 @@ The `client.py` script includes a main execution block that demonstrates the typ
 
 ## 6. Running the Client
 
-1.  **Ensure the Cloud2BIM Server is Running**: The FastAPI server (usually `main.py` in the project root) must be running and accessible at the `API_BASE_URL` (default `http://localhost:8000`).
-2.  **Verify Point Cloud File**: Make sure the `scan6.ptx` file exists at `/home/fothar/Cloud2BIM_web/test_data/scan6.ptx`.
-3.  **Install Dependencies**: The client requires the `requests` and `sseclient-py` libraries. Ensure they are installed in your Python environment.
+1.  **Ensure the Cloud2BIM Server is Running**: The FastAPI server (usually `main.py` in the project root or `app/main.py`) must be running and accessible at the `API_BASE_URL` (e.g., `http://localhost:8001`).
+2.  **Verify Point Cloud File**: Make sure the input point cloud file (e.g., `scan6.ptx`) exists at the specified path.
+3.  **Install Dependencies**: The client requires the `requests`, `sseclient-py`, and `open3d` libraries. Ensure they are installed in your Python environment.
     ```bash
-    pip install requests sseclient-py
+    pip install requests sseclient-py open3d
     ```
 4.  **Execute the Client Script**:
     Navigate to the project root directory (`/home/fothar/Cloud2BIM_web/`) in your terminal and run:
@@ -110,6 +116,7 @@ The client will then proceed to submit the job, print live progress logs from th
 
 -   `requests`: For making HTTP requests to the API.
 -   `sseclient-py`: For handling Server-Sent Event streams.
+-   `open3d`: For point cloud processing and conversion.
 
 ## 8. Customization
 

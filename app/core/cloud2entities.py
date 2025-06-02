@@ -404,6 +404,7 @@ class CloudToBimProcessor:
                 wall_materials,
                 translated_filtered_rotated_wall_groups,
                 wall_labels,
+                wall_groups_indices,
             ) = identify_walls(
                 storey_pointcloud,
                 self.pc_resolution,
@@ -431,6 +432,7 @@ class CloudToBimProcessor:
                     "z_placement": z_placement,
                     "height": wall_height,
                     "label": wall_labels[j],
+                    "point_indices": wall_groups_indices[j],
                 }
                 processed_walls.append(wall_data)
 
@@ -772,43 +774,92 @@ class CloudToBimProcessor:
         """
         Save the mapping between point cloud indices and IFC elements.
         This is useful for visualization and validation.
+        The JSON is pretty-printed, but all "points" arrays are written in a single line.
+        Maps point cloud indices to IFC entities using the actual IFC entity IDs.
         """
+        import re
+        import numpy as np
         mapping = {"slabs": {}, "walls": {}, "openings": {}}
 
         # Add mapping for slabs
         for idx, slab in enumerate(self.slabs):
-            slab_id = f"slab_{idx+1}"
+            slab_id = str(slab.get('ifc_id', f'slab_{idx+1}'))  # Use IFC ID if available
             if "point_indices" in slab:
                 mapping["slabs"][slab_id] = {
-                    "points": slab["point_indices"].tolist(),
+                    "points": slab["point_indices"].tolist()[:300],
                     "height": slab["slab_bottom_z_coord"],
                     "thickness": slab["thickness"],
+                    "ifc_type": slab.get("ifc_type", "IfcSlab")
                 }
 
         # Add mapping for walls
         for wall in self.walls:
-            wall_id = f"wall_{wall['wall_id']}"
+            wall_id = str(wall.get('ifc_id', f'wall_{wall["wall_id"]}'))  # Use IFC ID if available
             if "point_indices" in wall:
                 mapping["walls"][wall_id] = {
-                    "points": wall["point_indices"].tolist(),
+                    "points": wall["point_indices"][:300],
                     "storey": wall["storey"],
                     "thickness": wall["thickness"],
                     "label": wall["label"],
+                    "ifc_type": wall.get("ifc_type", "IfcWall")
                 }
 
         # Add mapping for openings
         for idx, opening in enumerate(self.all_openings):
-            opening_id = f"{opening['opening_type']}_{idx+1}"
+            opening_id = str(opening.get('ifc_id', f'{opening["opening_type"]}_{idx+1}'))  # Use IFC ID if available
             if "point_indices" in opening:
                 mapping["openings"][opening_id] = {
                     "points": opening["point_indices"].tolist(),
                     "wall_id": opening["opening_wall_id"],
                     "type": opening["opening_type"],
+                    "ifc_type": opening.get("ifc_type", "IfcOpeningElement")
                 }
+
+        def _convert_numpy_types(obj):
+            """Recursively convert numpy types to native Python types for JSON serialization."""
+            if isinstance(obj, dict):
+                return {k: _convert_numpy_types(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [_convert_numpy_types(i) for i in obj]
+            elif isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            else:
+                return obj
+
+        def _format_json_with_compact_points(obj):
+            """Format JSON with pretty-printing but keep points arrays in single lines."""
+            points_arrays = {}
+            
+            def _process_dict(d):
+                result = {}
+                for k, v in d.items():
+                    if k == "points" and isinstance(v, (list, np.ndarray)):
+                        placeholder = f"__POINTS_{len(points_arrays)}__"
+                        points_arrays[placeholder] = json.dumps(v)
+                        result[k] = placeholder
+                    elif isinstance(v, dict):
+                        result[k] = _process_dict(v)
+                    else:
+                        result[k] = v
+                return result
+            
+            native_obj = _convert_numpy_types(obj)
+            processed = _process_dict(native_obj)
+            pretty_json = json.dumps(processed, indent=2)
+            
+            for placeholder, points_array in points_arrays.items():
+                pretty_json = pretty_json.replace(f'"{placeholder}"', points_array)
+            
+            return pretty_json
 
         try:
             with open(self.point_mapping_file, "w") as f:
-                json.dump(mapping, f, indent=2)
+                formatted_json = _format_json_with_compact_points(mapping)
+                f.write(formatted_json)
             self._log(f"Point mapping saved to {self.point_mapping_file}")
         except Exception as e:
             self._log(f"Error saving point mapping: {e}", level="error")

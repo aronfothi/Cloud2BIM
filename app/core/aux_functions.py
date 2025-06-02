@@ -508,13 +508,14 @@ def identify_slabs(
 
     (
         horiz_surface_planes,
+        horiz_surface_indices,
         _,  # horiz_surface_colors - unused
         _,  # horiz_surface_polygon - unused
         _,  # horiz_surface_polygon_x - unused
         _,  # horiz_surface_polygon_y - unused
         _,  # horiz_surface_z - unused
         _,  # horiz_surface_thickness - unused
-    ) = ([], [], [], [], [], [], [])
+    ) = ([], [], [], [], [], [], [], [])
 
     # extract xyz points within an interval given by horiz_surface_candidates (lie within the range given by the
     # z-coordinates in horiz_surface candidates)
@@ -524,6 +525,7 @@ def identify_slabs(
             & (points_xyz[:, 2] < h_surf_candidates[i][1])
         )[0]
         horiz_surface_planes.append(points_xyz[horiz_surface_idx])
+        horiz_surface_indices.append(horiz_surface_idx)
         # horiz_surface_colors.append(points_rgb[horiz_surface_idx] / 255)
 
     # plot_horizontal_surfaces(horiz_surface_planes)
@@ -553,6 +555,7 @@ def identify_slabs(
                     "polygon_y_coords": y_coords,
                     "slab_bottom_z_coord": slab_bottom_z_coord,
                     "thickness": bottom_floor_slab_thickness,
+                    "point_indices": horiz_surface_indices[i]
                 }
             )
             print(
@@ -588,6 +591,9 @@ def identify_slabs(
                     "polygon_y_coords": y_coords,
                     "slab_bottom_z_coord": slab_bottom_z_coord,
                     "thickness": slab_thickness,
+                    "point_indices": np.concatenate(
+                        (horiz_surface_indices[i - 1], horiz_surface_indices[i])
+                    ),  # Combine indices of both surfaces
                 }
             )
             print(
@@ -618,6 +624,7 @@ def identify_slabs(
                     "polygon_y_coords": y_coords,
                     "slab_bottom_z_coord": slab_bottom_z_coord,
                     "thickness": top_floor_ceiling_thickness,
+                    "point_indices": horiz_surface_indices[i],
                 }
             )
             print(
@@ -1334,9 +1341,10 @@ def identify_walls(
     wall_directions = [(axis[1][0] - axis[0][0], axis[1][1] - axis[0][1]) for axis in wall_axes]
 
     # Assign points to walls
-    wall_groups, wall_thicknesses = assign_points_to_walls(
+    wall_groups, wall_thicknesses, wall_groups_indices = assign_points_to_walls(
         x_coords, y_coords, z_coords, wall_axes, parallel_groups, z_floor, z_ceiling
     )
+    # wall_groups_indices: for each wall, indices of the original pointcloud belonging to that wall
 
     # Rotate each group of points to the x-z plane
     rotated_wall_groups, rotated_wall_axes = [], []
@@ -1385,6 +1393,7 @@ def identify_walls(
         wall_materials,
         translated_filtered_rotated_wall_groups,
         wall_labels,
+        wall_groups_indices,
     )
 
 
@@ -1548,7 +1557,10 @@ def compute_wall_thickness(segment_group):
 def assign_points_to_walls(
     x_coords, y_coords, z_coords, wall_axes, parallel_groups, z_floor, z_ceiling
 ):
-    # Stack coordinates into a single array
+    """
+    Assigns each point to the closest wall axis if within an acceptable distance.
+    Returns both the grouped points and the indices of the original points for each wall.
+    """
     points = np.vstack([x_coords, y_coords, z_coords]).T
 
     # Compute wall thicknesses using a vectorized approach if possible
@@ -1558,6 +1570,7 @@ def assign_points_to_walls(
     # Filter points by z-coordinates first to reduce computations
     valid_z_mask = (z_floor < z_coords) & (z_coords < z_ceiling)
     valid_points = points[valid_z_mask]
+    valid_indices = np.where(valid_z_mask)[0]
 
     # Precompute line start and end arrays for vectorized distance calculations
     line_starts = np.array([axis[0] for axis in wall_axes])
@@ -1584,12 +1597,14 @@ def assign_points_to_walls(
 
     # Group points based on their closest wall
     wall_groups = [[] for _ in range(len(wall_axes))]
+    wall_groups_indices = [[] for _ in range(len(wall_axes))]
     for idx, point in enumerate(valid_points):
         min_dist_idx = min_distance_indices[idx]
         if min_distances[idx] <= acceptable_distances[min_dist_idx]:
             wall_groups[min_dist_idx].append(point.tolist())
+            wall_groups_indices[min_dist_idx].append(valid_indices[idx])
 
-    return wall_groups, wall_thicknesses
+    return wall_groups, wall_thicknesses, wall_groups_indices
 
 
 def rotate_points_to_xz_plane(points, direction_vector):
